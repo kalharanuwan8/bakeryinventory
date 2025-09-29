@@ -33,7 +33,10 @@ const Branch = () => {
   // Modals
   const [showAddModal, setShowAddModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
+  const [showInventoryModal, setShowInventoryModal] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState(null);
+  const [inventoryData, setInventoryData] = useState({ branch: null, inventory: [] });
+  const [loadingInventory, setLoadingInventory] = useState(false);
 
   const emptyForm = {
     name: '',
@@ -146,6 +149,24 @@ const Branch = () => {
     setShowDetailModal(true);
   };
 
+  const handleViewInventory = async (branch) => {
+    try {
+      setLoadingInventory(true);
+      setShowInventoryModal(true);
+      
+      const response = await API.post('/branches/branches/inventory', {
+        branchCode: branch.code
+      });
+      
+      setInventoryData(response.data);
+    } catch (error) {
+      console.error(error);
+      alert(error?.response?.data?.error || 'Failed to load inventory');
+    } finally {
+      setLoadingInventory(false);
+    }
+  };
+
   // Toggle status button (cycles through allowed statuses)
   const nextStatus = (s) =>
     s === 'active' ? 'inactive' : s === 'inactive' ? 'maintenance' : 'active';
@@ -167,10 +188,6 @@ const Branch = () => {
       alert(e?.response?.data?.error || 'Failed to update status');
     }
   };
-
-  const totalItems = branches.reduce((sum, b) => sum + (b.totalItems || 0), 0);
-  const totalValue = branches.reduce((sum, b) => sum + (b.totalValue || 0), 0);
-  const dailySales = branches.reduce((sum, b) => sum + (b.dailySales || 0), 0);
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto">
@@ -222,51 +239,18 @@ const Branch = () => {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-          <div className="flex items-center">
-            <Building2 className="w-8 h-8 text-green-600" />
-            <div className="ml-4">
-              <p className="text-2xl font-bold text-gray-900">{branches.length}</p>
-              <p className="text-gray-600 text-sm">Total Branches</p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-          <div className="flex items-center">
-            <Package className="w-8 h-8 text-blue-600" />
-            <div className="ml-4">
-              <p className="text-2xl font-bold text-gray-900">{totalItems}</p>
-              <p className="text-gray-600 text-sm">Total Items</p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-          <div className="flex items-center">
-            <DollarSign className="w-8 h-8 text-purple-600" />
-            <div className="ml-4">
-              <p className="text-2xl font-bold text-gray-900">
-                ${totalValue.toLocaleString()}
-              </p>
-              <p className="text-gray-600 text-sm">Total Inventory Value</p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-          <div className="flex items-center">
-            <DollarSign className="w-8 h-8 text-orange-600" />
-            <div className="ml-4">
-              <p className="text-2xl font-bold text-gray-900">
-                ${dailySales.toLocaleString()}
-              </p>
-              <p className="text-gray-600 text-sm">Daily Sales</p>
-            </div>
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 mb-8 flex w-1/3">
+        <div className="flex items-center">
+          <Building2 className="w-8 h-8 text-green-600" />
+          <div className="ml-4">
+            <p className="text-2xl font-bold text-gray-900">{branches.length}</p>
+            <p className="text-gray-600 text-sm">Total Branches</p>
           </div>
         </div>
       </div>
 
       {/* Branches Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-4">
         {loading ? (
           <div className="col-span-full text-gray-500">Loading…</div>
         ) : err ? (
@@ -312,13 +296,20 @@ const Branch = () => {
                 </div>
               </div>
 
-              <div className="border-t pt-4 grid grid-cols-2 gap-3">
+              <div className="border-t pt-4 grid grid-cols-3 gap-3">
                 <button
                   onClick={() => handleViewBranch(b)}
                   className="w-full bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center"
                 >
                   <Eye className="w-4 h-4 mr-2" />
                   View
+                </button>
+                <button
+                  onClick={() => handleViewInventory(b)}
+                  className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center"
+                >
+                  <Package className="w-4 h-4 mr-2" />
+                  Inventory
                 </button>
                 <div className="flex gap-2">
                   <button
@@ -552,6 +543,54 @@ const Branch = () => {
                 <p className="text-sm text-gray-700">{selectedBranch.description}</p>
               </div>
             ) : null}
+          </div>
+        </div>
+      )}
+
+      {/* Inventory Modal */}
+      {showInventoryModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-semibold text-gray-900">
+                {inventoryData.branch?.name} — Inventory
+              </h3>
+              <button
+                onClick={() => setShowInventoryModal(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {loadingInventory ? (
+              <div className="text-center py-8">Loading inventory...</div>
+            ) : (
+              <>
+                {inventoryData.inventory.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    No inventory items found
+                  </div>
+                ) : (
+                  <div className="divide-y">
+                    {inventoryData.inventory.map((item) => (
+                      <div
+                        key={item.code}
+                        className="py-3 flex justify-between items-center"
+                      >
+                        <div>
+                          <div className="font-medium">{item.name}</div>
+                          <div className="text-sm text-gray-500">Code: {item.code}</div>
+                        </div>
+                        <div className="font-semibold">
+                          Qty: {item.quantity}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}

@@ -285,24 +285,7 @@ const Dashboard = () => {
       </div>
 
       {/* Quick Actions */}
-      <div className="mt-8 grid grid-cols-1 md:grid-cols-4 gap-4">
-        <button className="p-4 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-center">
-          <ShoppingCart className="w-6 h-6 mx-auto mb-2" />
-          <span className="text-sm font-medium">New Order</span>
-        </button>
-        <button className="p-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-center">
-          <Package className="w-6 h-6 mx-auto mb-2" />
-          <span className="text-sm font-medium">Update Stock</span>
-        </button>
-        <button className="p-4 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-center">
-          <Building2 className="w-6 h-6 mx-auto mb-2" />
-          <span className="text-sm font-medium">Add Branch</span>
-        </button>
-        <button className="p-4 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-center">
-          <Users className="w-6 h-6 mx-auto mb-2" />
-          <span className="text-sm font-medium">View Reports</span>
-        </button>
-      </div>
+      
     </div>
   );
 };

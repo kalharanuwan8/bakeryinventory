@@ -1,26 +1,24 @@
 import React, { useEffect, useState } from 'react';
-import { 
-  Edit, 
-  Send, 
-  Package, 
-  AlertCircle, 
+import {
+  Edit,
+  Send,
+  Package,
+  AlertCircle,
   CheckCircle,
-  X 
+  X
 } from 'lucide-react';
 import API from '../../api/axios';
 
 const MainBakery = () => {
   const [items, setItems] = useState([]);
-  const [branches, setBranches] = useState([]);
+  const [branches, setBranches] = useState([]); // [{ id, name, code }]
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
 
-  // Stock update modal state
+  // Stock update modal state (SET exact count)
   const [showStockModal, setShowStockModal] = useState(false);
   const [selectedItem, setSelectedItem] = useState(null);
-  const [stockAmount, setStockAmount] = useState('');
-  const [stockOperation, setStockOperation] = useState('add'); // 'add' | 'subtract' | 'set'
-  const [selectedBranchId, setSelectedBranchId] = useState('');
+  const [newStockCount, setNewStockCount] = useState('');
 
   // Transfer modal state
   const [showTransferModal, setShowTransferModal] = useState(false);
@@ -34,20 +32,12 @@ const MainBakery = () => {
         API.get('/branches'),
       ]);
 
-      // Normalize responses (support both {data: {data: []}} and {data: {items: []/branches: []}})
       const itemsList = itemsRes?.data?.data ?? itemsRes?.data?.items ?? [];
       const branchList = branchesRes?.data?.data ?? branchesRes?.data?.branches ?? [];
 
       setItems(itemsList);
-      const shaped = branchList.map(b => ({ id: b._id, name: b.name }));
-      setBranches(shaped);
-
-      // Default selected branch if empty
-      if (!selectedBranchId && shaped.length) {
-        // Prefer a branch that looks like "Main" / "HQ"; else first
-        const main = shaped.find(b => /main|hq|central/i.test(b.name)) || shaped[0];
-        setSelectedBranchId(main.id);
-      }
+      // keep branch code for transfer payload
+      setBranches(branchList.map(b => ({ id: b._id, name: b.name, code: b.code })));
 
       setErr('');
     } catch (e) {
@@ -66,8 +56,7 @@ const MainBakery = () => {
   const handleUpdateStock = (item) => {
     setSelectedItem(item);
     setShowStockModal(true);
-    setStockAmount('');
-    setStockOperation('add');
+    setNewStockCount(String(item?.stock ?? 0)); // pre-fill
   };
 
   const handleTransfer = (item) => {
@@ -76,38 +65,26 @@ const MainBakery = () => {
     setTransferData({ branchId: '', quantity: '' });
   };
 
+  // Set stock directly via /items/:id (server maps stockAvailable -> stock)
   const submitStockUpdate = async () => {
     try {
       if (!selectedItem?._id) {
         alert('No item selected');
         return;
       }
-      if (!selectedBranchId) {
-        alert('Please select a branch');
-        return;
-      }
 
-      const qty = Number(stockAmount);
+      const qty = Number(newStockCount);
       if (!Number.isFinite(qty) || qty < 0) {
-        alert('Enter a valid non-negative quantity');
+        alert('Enter a valid non-negative stock count');
         return;
       }
 
-      // Backend expects: { itemId, branchId, quantity, operation }
-      await API.patch('/inventory/update-stock', {
-        itemId: selectedItem._id,
-        branchId: selectedBranchId,
-        quantity: qty,
-        operation: stockOperation,
-      });
+      await API.put(`/items/${selectedItem._id}`, { stockAvailable: qty });
 
-      // Safer: refetch to sync UI with server
       await fetchData();
-
       setShowStockModal(false);
       setSelectedItem(null);
-      setStockAmount('');
-      setStockOperation('add');
+      setNewStockCount('');
     } catch (e) {
       console.error(e);
       alert(e?.response?.data?.error || 'Stock update failed');
@@ -120,42 +97,37 @@ const MainBakery = () => {
     const qty = parseInt(transferData.quantity, 10);
     if (Number.isNaN(qty) || qty <= 0) return;
 
-    // If your item model has `stock` for the main bakery context, enforce available stock
     if ((selectedItem.stock ?? 0) < qty) {
       alert('Insufficient stock for transfer');
       return;
     }
 
     const prev = items;
-
-    // Optimistic UI for main stock
-    setItems(prev.map(i => i._id === selectedItem._id ? { ...i, stock: (i.stock || 0) - qty } : i));
+    // optimistic UI: decrement locally
+    setItems(prev.map(i => (i._id === selectedItem._id ? { ...i, stock: (i.stock || 0) - qty } : i)));
 
     try {
-      const res = await API.post('/transfers', {
-        itemId: selectedItem._id,
-        toBranchId: transferData.branchId,
+      const selectedBranch = branches.find(b => b.id === transferData.branchId);
+      if (!selectedBranch?.code) {
+        throw new Error('Selected branch code not found; ensure /branches returns { _id, name, code }');
+      }
+
+      // Path must match your router mount (e.g., '/api/inventory/transfers')
+      await API.post('/inventory/transfers', {
+        itemCode: selectedItem.code,
+        branchCode: selectedBranch.code,
         quantity: qty,
       });
 
-      // Normalize updated item
-      const updated = res?.data?.data ?? res?.data?.item;
-      if (updated?._id) {
-        setItems(list => list.map(i => i._id === updated._id ? updated : i));
-      } else {
-        // If API doesn’t return updated item, refetch
-        await fetchData();
-      }
-
+      await fetchData();
       setShowTransferModal(false);
-      const branchName = branches.find(b => b.id === transferData.branchId)?.name || 'branch';
-      alert(`Transferred ${qty} ${selectedItem.name} to ${branchName}`);
+      alert(`Transferred ${qty} ${selectedItem.name} to ${selectedBranch.name}`);
       setSelectedItem(null);
       setTransferData({ branchId: '', quantity: '' });
     } catch (e) {
-      console.error(e);
-      alert(e?.response?.data?.error || 'Transfer failed');
-      // Rollback
+      console.error('Transfer error:', e);
+      alert(e?.response?.data?.error || e.message || 'Transfer failed');
+      // rollback optimistic change
       setItems(prev);
     }
   };
@@ -187,7 +159,7 @@ const MainBakery = () => {
             </div>
           </div>
         </div>
-        
+
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
           <div className="flex items-center">
             <CheckCircle className="w-8 h-8 text-green-600" />
@@ -199,7 +171,7 @@ const MainBakery = () => {
             </div>
           </div>
         </div>
-        
+
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
           <div className="flex items-center">
             <AlertCircle className="w-8 h-8 text-orange-600" />
@@ -211,7 +183,7 @@ const MainBakery = () => {
             </div>
           </div>
         </div>
-        
+
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
           <div className="flex items-center">
             <Package className="w-8 h-8 text-blue-600" />
@@ -230,7 +202,7 @@ const MainBakery = () => {
         <div className="p-6 border-b border-gray-200">
           <h2 className="text-xl font-semibold text-gray-900">Current Inventory</h2>
         </div>
-        
+
         <div className="overflow-x-auto">
           {loading ? (
             <div className="p-6 text-gray-500">Loading…</div>
@@ -293,7 +265,8 @@ const MainBakery = () => {
                         </div>
                       </td>
                     </tr>
-                )})}
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -310,56 +283,31 @@ const MainBakery = () => {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            
+
             <div className="mb-4">
               <p className="text-sm text-gray-600 mb-2">Item: {selectedItem?.name}</p>
-              <p className="text-sm text-gray-600 mb-4">Current Stock: {selectedItem?.stock} units</p>
+              <p className="text-sm text-gray-600 mb-4">Current Stock: {selectedItem?.stock ?? 0} units</p>
 
-              {/* Branch select */}
-              <label className="block text-sm font-medium text-gray-700 mb-2">Branch</label>
-              <select
-                value={selectedBranchId}
-                onChange={(e) => setSelectedBranchId(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 mb-4"
-              >
-                {branches.map(b => (
-                  <option key={b.id} value={b.id}>{b.name}</option>
-                ))}
-              </select>
-
-              {/* Operation */}
-              <label className="block text-sm font-medium text-gray-700 mb-2">Operation</label>
-              <select
-                value={stockOperation}
-                onChange={(e) => setStockOperation(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 mb-4"
-              >
-                <option value="add">Add</option>
-                <option value="subtract">Subtract</option>
-                <option value="set">Set</option>
-              </select>
-              
-              {/* Quantity */}
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Quantity
+                New Stock Count
               </label>
               <input
                 type="number"
-                value={stockAmount}
-                onChange={(e) => setStockAmount(e.target.value)}
+                value={newStockCount}
+                onChange={(e) => setNewStockCount(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
-                placeholder="Enter quantity"
+                placeholder="Enter new stock count"
                 min="0"
               />
             </div>
-            
+
             <div className="flex space-x-3">
               <button
                 onClick={submitStockUpdate}
-                disabled={!stockAmount || !selectedBranchId}
+                disabled={newStockCount === '' || Number(newStockCount) < 0}
                 className="flex-1 bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Update Stock
+                Save
               </button>
               <button
                 onClick={() => setShowStockModal(false)}
@@ -382,11 +330,11 @@ const MainBakery = () => {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            
+
             <div className="mb-4">
               <p className="text-sm text-gray-600 mb-2">Item: {selectedItem?.name}</p>
-              <p className="text-sm text-gray-600 mb-4">Available Stock: {selectedItem?.stock} units</p>
-              
+              <p className="text-sm text-gray-600 mb-4">Available Stock: {selectedItem?.stock ?? 0} units</p>
+
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -394,16 +342,18 @@ const MainBakery = () => {
                   </label>
                   <select
                     value={transferData.branchId}
-                    onChange={(e) => setTransferData({...transferData, branchId: e.target.value})}
+                    onChange={(e) => setTransferData({ ...transferData, branchId: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
                   >
                     <option value="">Choose a branch</option>
                     {branches.map(branch => (
-                      <option key={branch.id} value={branch.id}>{branch.name}</option>
+                      <option key={branch.id} value={branch.id}>
+                        {branch.name}{branch.code ? ` (${branch.code})` : ''}
+                      </option>
                     ))}
                   </select>
                 </div>
-                
+
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Quantity to Transfer
@@ -411,7 +361,7 @@ const MainBakery = () => {
                   <input
                     type="number"
                     value={transferData.quantity}
-                    onChange={(e) => setTransferData({...transferData, quantity: e.target.value})}
+                    onChange={(e) => setTransferData({ ...transferData, quantity: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
                     placeholder="Enter quantity"
                     min="1"
@@ -420,7 +370,7 @@ const MainBakery = () => {
                 </div>
               </div>
             </div>
-            
+
             <div className="flex space-x-3">
               <button
                 onClick={submitTransfer}
@@ -443,4 +393,4 @@ const MainBakery = () => {
   );
 };
 
-export default MainBakery;
+export default MainBakery; 

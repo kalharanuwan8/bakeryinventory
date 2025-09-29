@@ -1,203 +1,188 @@
 // controllers/itemController.js
-import Item from "../models/Item.js"; // Change from "item.js" to "Item.js"
+import mongoose from "mongoose";
+import Item from "../models/Item.js"; // schema: { code, name, category(enum or string), price:Number, stock:Number }
+
+const toNumberOr = (v, fallback = 0) =>
+  Number.isFinite(Number(v)) ? Number(v) : fallback;
+
+const normalizeCode = (code) => String(code || "").toUpperCase().trim();
 
 /**
  * GET /api/items
- * Query: search, category, active ("true"/"false"), page, limit
+ * Query: search, category, page, limit
  */
 export const getItems = async (req, res) => {
   try {
-    const {
-      search = "",
-      category = "all",
-      active = "true",
-      page = 1,
-      limit = 100, // front-end doesn't paginate yet; keep generous default
-    } = req.query;
-
-    console.log('Query params:', { search, category, active, page, limit }); // Debug log
+    const search = String(req.query.search || "").trim();
+    const category = String(req.query.category || "all");
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
 
     const query = {};
-
-    // Active / inactive filter
-    if (active === "true") query.isActive = true;
-    if (active === "false") query.isActive = false;
-
-    // Category filter (ignore "all")
-    if (category && category !== "all") {
-      query.category = category;
+    if (category && category !== "all") query.category = category;
+    if (search) {
+      const rx = new RegExp(search, "i");
+      query.$or = [{ name: rx }, { code: rx }];
     }
 
-    // Search in name / description / code
-    if (search && search.trim().length > 0) {
-      const rx = new RegExp(search.trim(), "i");
-      query.$or = [{ name: rx }, { description: rx }, { code: rx }];
-    }
-
-    console.log('MongoDB query:', JSON.stringify(query, null, 2)); // Debug log
-
-    const skip = (Number(page) - 1) * Number(limit);
+    const skip = (page - 1) * limit;
 
     const [items, total] = await Promise.all([
-      Item.find(query)
-        .sort({ createdAt: -1 }) // Changed from -0 to -1 for descending order
-        .skip(skip)
-        .limit(Number(limit)),
+      Item.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       Item.countDocuments(query),
     ]);
 
-    console.log(`Found ${items.length} items`); // Debug log
-
-    res.json({ items, total, page: Number(page), limit: Number(limit) });
+    return res.json({ items, total, page, limit });
   } catch (err) {
     console.error("getItems error:", err);
-    res.status(500).json({ error: "Failed to fetch items" });
-  }
-};
-
-/**
- * GET /api/items/categories
- * Returns available categories. Uses the enum from the schema and also distinct values in DB.
- */
-export const getCategories = async (_req, res) => {
-  try {
-    const enumCats = Item.schema.path("category")?.enumValues || [];
-    const dbCats = await Item.distinct("category");
-    // Merge + sort unique values
-    const set = new Set([...enumCats, ...dbCats].filter(Boolean));
-    const categories = Array.from(set).sort((a, b) => a.localeCompare(b));
-    res.json({ categories });
-  } catch (err) {
-    console.error("getCategories error:", err);
-    res.status(500).json({ error: "Failed to load categories" });
+    return res.status(500).json({ error: "Failed to fetch items" });
   }
 };
 
 /**
  * POST /api/items
- * Body: { code, name, category, price, description, ingredients, allergens, shelfLife, nutritionalInfo, isActive }
+ * Body: { code, name, category, price, stockAvailable? , stock? }
+ * - Uses `price` directly.
+ * - If `stockAvailable` provided, maps to numeric `stock`.
  */
 export const createItem = async (req, res) => {
   try {
-    const {
-      code,
-      name,
-      category,
-      price,
-      description,
-      ingredients,
-      allergens,
-      shelfLife,
-      nutritionalInfo,
-      isActive,
-    } = req.body;
+    const { code, name, category, price, stockAvailable, stock } = req.body;
 
-    const exists = await Item.findOne({ code: String(code).toUpperCase().trim() });
+    if (!code || !name || !category) {
+      return res
+        .status(400)
+        .json({ error: "code, name, and category are required" });
+    }
+
+    const normalizedCode = normalizeCode(code);
+
+    const exists = await Item.findOne({ code: normalizedCode }).lean();
     if (exists) {
-      return res.status(400).json({ error: "Item code already exists" });
+      return res.status(409).json({ error: "Item code already exists" });
+    }
+
+    const numericPrice = toNumberOr(price, NaN);
+    if (Number.isNaN(numericPrice)) {
+      return res.status(400).json({ error: "price is required and must be a number" });
     }
 
     const item = await Item.create({
-      code,
-      name,
-      category,
-      price,
-      description,
-      ingredients,
-      allergens,
-      shelfLife,
-      nutritionalInfo,
-      isActive,
+      code: normalizedCode,
+      name: String(name).trim(),
+      category: String(category).trim(),
+      price: numericPrice,
+      stock: toNumberOr(stockAvailable ?? stock ?? 0, 0),
     });
 
-    res.status(201).json({ item });
+    return res.status(201).json({ item });
   } catch (err) {
     console.error("createItem error:", err);
+    if (err?.code === 11000) return res.status(409).json({ error: "Item code already exists" });
     if (err?.name === "ValidationError") {
       const firstMsg = Object.values(err.errors)?.[0]?.message || "Validation error";
       return res.status(400).json({ error: firstMsg });
     }
-    res.status(500).json({ error: "Failed to create item" });
+    return res.status(500).json({ error: "Failed to create item" });
   }
 };
 
 /**
  * PUT /api/items/:id
+ * Accepts any of: { code, name, category, price, stockAvailable, stock }
  */
 export const updateItem = async (req, res) => {
   try {
     const { id } = req.params;
-
-    // If code is changing, ensure uniqueness
-    if (req.body.code) {
-      const code = String(req.body.code).toUpperCase().trim();
-      const clash = await Item.findOne({ code, _id: { $ne: id } });
-      if (clash) {
-        return res.status(400).json({ error: "Another item already uses this code" });
-      }
-      req.body.code = code;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ error: "Invalid item id" });
     }
 
-    const item = await Item.findByIdAndUpdate(id, req.body, {
+    const body = { ...req.body };
+
+    // Normalize code + ensure uniqueness
+    if (body.code) {
+      const normalizedCode = normalizeCode(body.code);
+      const clash = await Item.findOne({ code: normalizedCode, _id: { $ne: id } }).lean();
+      if (clash) return res.status(409).json({ error: "Another item already uses this code" });
+      body.code = normalizedCode;
+    }
+
+    // price: ensure number if provided
+    if (body.price !== undefined) {
+      const numericPrice = toNumberOr(body.price, NaN);
+      if (Number.isNaN(numericPrice)) {
+        return res.status(400).json({ error: "price must be a number" });
+      }
+      body.price = numericPrice;
+    }
+
+    // Map stockAvailable -> stock (Number) if provided
+    if (body.stockAvailable !== undefined || body.stock !== undefined) {
+      body.stock = toNumberOr(body.stockAvailable ?? body.stock, 0);
+      delete body.stockAvailable;
+    }
+
+    if (body.name !== undefined) body.name = String(body.name).trim();
+    if (body.category !== undefined) body.category = String(body.category).trim();
+
+    const item = await Item.findByIdAndUpdate(id, body, {
       new: true,
       runValidators: true,
-    });
+    }).lean();
 
     if (!item) return res.status(404).json({ error: "Item not found" });
-
-    res.json({ item });
+    return res.json({ item });
   } catch (err) {
     console.error("updateItem error:", err);
     if (err?.name === "ValidationError") {
       const firstMsg = Object.values(err.errors)?.[0]?.message || "Validation error";
       return res.status(400).json({ error: firstMsg });
     }
-    res.status(500).json({ error: "Failed to update item" });
+    return res.status(500).json({ error: "Failed to update item" });
   }
 };
 
 /**
  * DELETE /api/items/:id
- * Soft delete → set isActive:false
  */
 export const deleteItem = async (req, res) => {
   try {
     const { id } = req.params;
-    const item = await Item.findByIdAndDelete(id);
-
-    if (!item) {
-      return res.status(404).json({ error: "Item not found" });
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ error: "Invalid item id" });
     }
 
-    res.json({ message: "Item permanently deleted", item });
+    const item = await Item.findByIdAndDelete(id).lean();
+    if (!item) return res.status(404).json({ error: "Item not found" });
+
+    return res.json({ message: "Item permanently deleted", item });
   } catch (err) {
     console.error("deleteItem error:", err);
-    res.status(500).json({ error: "Failed to delete item" });
+    return res.status(500).json({ error: "Failed to delete item" });
   }
 };
 
 /**
- * PATCH /api/items/:id/toggle-status
- * Toggle active/inactive status of an item
+ * PUT /api/items/reset-stock
+ * Resets the stock of all items to 0
  */
-export const toggleStatus = async (req, res) => {
+export const resetAllStocks = async (req, res) => {
   try {
-    const { id } = req.params;
-    const item = await Item.findById(id);
-    
-    if (!item) {
-      return res.status(404).json({ error: "Item not found" });
-    }
+    // grab current items (optional, useful for reporting)
+    const items = await Item.find({}, 'code name stock').lean();
 
-    item.isActive = !item.isActive;
-    await item.save();
+    // set stock = 0 for all items
+    const result = await Item.updateMany({}, { $set: { stock: 0 } });
 
-    res.json({ 
-      message: `Item status changed to ${item.isActive ? 'active' : 'inactive'}`, 
-      item 
+    return res.json({
+      message: 'All item stocks have been reset to 0',
+      totalItems: items.length,
+      modifiedCount: result.modifiedCount,
+      affectedCodes: items.map(i => i.code),
     });
   } catch (err) {
-    console.error("toggleStatus error:", err);
-    res.status(500).json({ error: "Failed to update item status" });
+    console.error('resetAllStocks error:', err);
+    return res.status(500).json({ error: 'Failed to reset stock' });
   }
 };

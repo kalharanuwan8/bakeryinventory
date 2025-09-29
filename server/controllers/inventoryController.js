@@ -1,9 +1,15 @@
+// controllers/inventoryController.js
 import mongoose from 'mongoose';
 import Inventory from '../models/Inventory.js';
 import Transfer from '../models/Transfer.js';
 import Item from '../models/Item.js';
 import Branch from '../models/Branch.js';
 
+// ---------- Helpers (define once, at top-level) ----------
+const toNumberOr = (v, fb = 0) => (Number.isFinite(Number(v)) ? Number(v) : fb);
+const normalizeCode = (v) => String(v || '').trim().toUpperCase();
+
+// =========================================================
 export const inventoryController = {
   // Get inventory for a specific branch
   getBranchInventory: async (req, res) => {
@@ -11,12 +17,16 @@ export const inventoryController = {
       const { branchId } = req.params;
       const { lowStock = false } = req.query;
 
+      if (!mongoose.isValidObjectId(branchId)) {
+        return res.status(400).json({ error: 'Invalid branchId' });
+      }
+
       let query = { branch: branchId };
-      
-      if (lowStock === 'true') {
+
+      if (String(lowStock) === 'true') {
         query = {
           ...query,
-          $expr: { $lte: ['$currentStock', '$reorderPoint'] }
+          $expr: { $lte: ['$currentStock', '$reorderPoint'] },
         };
       }
 
@@ -33,9 +43,9 @@ export const inventoryController = {
   },
 
   // Get main bakery inventory
-  getMainBakeryInventory: async (req, res) => {
+  getMainBakeryInventory: async (_req, res) => {
     try {
-      const mainBranch = await Branch.findOne({ code: 'MAIN' });
+      const mainBranch = await Branch.findOne({ code: 'MAIN' }).lean();
       if (!mainBranch) {
         return res.status(404).json({ error: 'Main bakery branch not found' });
       }
@@ -57,7 +67,17 @@ export const inventoryController = {
       const { itemId, branchId, quantity, operation = 'add' } = req.body;
 
       if (!itemId || !branchId || quantity === undefined) {
-        return res.status(400).json({ error: 'Item ID, branch ID, and quantity are required' });
+        return res
+          .status(400)
+          .json({ error: 'Item ID, branch ID, and quantity are required' });
+      }
+      if (!mongoose.isValidObjectId(itemId) || !mongoose.isValidObjectId(branchId)) {
+        return res.status(400).json({ error: 'Invalid itemId or branchId' });
+      }
+
+      const qty = toNumberOr(quantity, NaN);
+      if (!Number.isFinite(qty) || qty < 0) {
+        return res.status(400).json({ error: 'Quantity must be a non-negative number' });
       }
 
       let inventory = await Inventory.findOne({ item: itemId, branch: branchId });
@@ -66,15 +86,18 @@ export const inventoryController = {
         inventory = new Inventory({
           item: itemId,
           branch: branchId,
-          currentStock: operation === 'set' ? quantity : (operation === 'add' ? quantity : 0)
+          currentStock: operation === 'set' ? qty : operation === 'add' ? qty : 0,
+          lastRestocked: new Date(),
         });
       } else {
         if (operation === 'set') {
-          inventory.currentStock = quantity;
+          inventory.currentStock = qty;
         } else if (operation === 'add') {
-          inventory.currentStock += quantity;
+          inventory.currentStock += qty;
         } else if (operation === 'subtract') {
-          inventory.currentStock = Math.max(0, inventory.currentStock - quantity);
+          inventory.currentStock = Math.max(0, inventory.currentStock - qty);
+        } else {
+          return res.status(400).json({ error: 'Invalid operation' });
         }
         inventory.lastRestocked = new Date();
       }
@@ -90,96 +113,67 @@ export const inventoryController = {
     }
   },
 
-  // Transfer items between branches
-  transferItems: async (req, res) => {
-    try {
-      const { itemId, fromBranchId, toBranchId, quantity, notes } = req.body;
+  // --- Transfer using itemCode + branchCode ---
+  // --- Minimal transfer by codes: create transfer, then decrement item stock ---
+transferItems: async (req, res) => {
+  const { itemCode, branchCode, quantity } = req.body;
 
-      if (!itemId || !fromBranchId || !toBranchId || !quantity) {
-        return res.status(400).json({ error: 'Item ID, source branch, destination branch, and quantity are required' });
-      }
+  // no validations (per request) — assumes codes exist and quantity is valid
+  const iCode = normalizeCode(itemCode);
+  const bCode = normalizeCode(branchCode);
+  const qty = Number(quantity);
 
-      if (fromBranchId === toBranchId) {
-        return res.status(400).json({ error: 'Source and destination branches cannot be the same' });
-      }
+  // find docs by code
+  const item = await Item.findOne({ code: iCode }).lean();
+  const branch = await Branch.findOne({ code: bCode }).lean();
 
-      const session = await mongoose.startSession();
-      session.startTransaction();
+  // create transfer first
+  const transfer = await Transfer.create({
+    item: item._id,
+    fromBranch: null,          // central/main
+    toBranch: branch._id,
+    quantity: qty,
+    status: 'delivered',
+    requestDate: new Date(),
+    deliveryDate: new Date(),
+  });
 
-      try {
-        const sourceInventory = await Inventory.findOne({ item: itemId, branch: fromBranchId }).session(session);
-        if (!sourceInventory || sourceInventory.currentStock < quantity) {
-          await session.abortTransaction();
-          return res.status(400).json({ error: 'Insufficient stock in source branch' });
-        }
+  // then decrement main item stock
+  await Item.updateOne({ _id: item._id }, { $inc: { stock: -qty } });
 
-        sourceInventory.currentStock -= quantity;
-        await sourceInventory.save({ session });
+  return res.status(201).json({ transfer });
+},
 
-        let destInventory = await Inventory.findOne({ item: itemId, branch: toBranchId }).session(session);
-        if (!destInventory) {
-          destInventory = new Inventory({ item: itemId, branch: toBranchId, currentStock: quantity });
-        } else {
-          destInventory.currentStock += quantity;
-          destInventory.lastRestocked = new Date();
-        }
-        await destInventory.save({ session });
-
-        const transfer = new Transfer({
-          item: itemId,
-          fromBranch: fromBranchId,
-          toBranch: toBranchId,
-          quantity,
-          status: 'delivered',
-          approvedDate: new Date(),
-          deliveryDate: new Date(),
-          notes
-        });
-
-        await transfer.save({ session });
-        await session.commitTransaction();
-
-        await transfer.populate('item', 'name code');
-        await transfer.populate('fromBranch', 'name');
-        await transfer.populate('toBranch', 'name');
-
-        res.json({ message: 'Transfer completed successfully', transfer });
-      } catch (error) {
-        await session.abortTransaction();
-        throw error;
-      } finally {
-        session.endSession();
-      }
-    } catch (error) {
-      console.error('Error processing transfer:', error);
-      res.status(500).json({ error: 'Server error while processing transfer' });
-    }
-  },
 
   // Get transfer history
-  getTransfers: async (req, res) => {
+  getTransferHistory: async (req, res) => {
     try {
-      const { branchId, status, limit = 50 } = req.query;
-      let query = {};
+      const { itemId, branchId } = req.query;
 
-      if (branchId) {
-        query.$or = [{ fromBranch: branchId }, { toBranch: branchId }];
+      const query = {};
+      if (itemId) {
+        if (!mongoose.isValidObjectId(itemId)) {
+          return res.status(400).json({ error: 'Invalid itemId' });
+        }
+        query.item = itemId;
       }
-      if (status) {
-        query.status = status;
+      if (branchId) {
+        if (!mongoose.isValidObjectId(branchId)) {
+          return res.status(400).json({ error: 'Invalid branchId' });
+        }
+        query.toBranch = branchId;
       }
 
       const transfers = await Transfer.find(query)
-        .populate('item', 'name code category')
+        .populate('item', 'name code')
         .populate('fromBranch', 'name code')
         .populate('toBranch', 'name code')
-        .sort({ createdAt: -1 })
-        .limit(parseInt(limit));
+        .sort({ requestDate: -1 });
 
       res.json({ transfers });
     } catch (error) {
-      console.error('Error fetching transfers:', error);
-      res.status(500).json({ error: 'Server error while fetching transfers' });
+      console.error('Error fetching transfer history:', error);
+      res.status(500).json({ error: 'Server error while fetching transfer history' });
     }
   },
 
@@ -187,9 +181,14 @@ export const inventoryController = {
   getAlerts: async (req, res) => {
     try {
       const { branchId } = req.query;
-      let query = {};
+      const query = {};
 
-      if (branchId) query.branch = branchId;
+      if (branchId) {
+        if (!mongoose.isValidObjectId(branchId)) {
+          return res.status(400).json({ error: 'Invalid branchId' });
+        }
+        query.branch = branchId;
+      }
 
       const inventory = await Inventory.find(query)
         .populate('item', 'name code category')
@@ -197,7 +196,7 @@ export const inventoryController = {
 
       const alerts = { outOfStock: [], lowStock: [], overStocked: [] };
 
-      inventory.forEach(inv => {
+      inventory.forEach((inv) => {
         if (inv.currentStock === 0) alerts.outOfStock.push(inv);
         else if (inv.currentStock <= inv.reorderPoint) alerts.lowStock.push(inv);
         else if (inv.currentStock >= inv.maxStockLevel) alerts.overStocked.push(inv);
@@ -211,11 +210,16 @@ export const inventoryController = {
   },
 
   // Get inventory summary
-  getSummary: async (req, res) => {
+  getSummary: async (_req, res) => {
     try {
       const summary = await Inventory.aggregate([
         {
-          $lookup: { from: 'items', localField: 'item', foreignField: '_id', as: 'itemInfo' }
+          $lookup: {
+            from: 'items',
+            localField: 'item',
+            foreignField: '_id',
+            as: 'itemInfo',
+          },
         },
         { $unwind: '$itemInfo' },
         {
@@ -224,15 +228,22 @@ export const inventoryController = {
             totalItems: { $sum: 1 },
             totalStock: { $sum: '$currentStock' },
             totalValue: { $sum: { $multiply: ['$currentStock', '$itemInfo.price'] } },
-            lowStockItems: { $sum: { $cond: [{ $lte: ['$currentStock', '$reorderPoint'] }, 1, 0] } },
-            outOfStockItems: { $sum: { $cond: [{ $eq: ['$currentStock', 0] }, 1, 0] } }
-          }
-        }
+            lowStockItems: {
+              $sum: { $cond: [{ $lte: ['$currentStock', '$reorderPoint'] }, 1, 0] },
+            },
+            outOfStockItems: { $sum: { $cond: [{ $eq: ['$currentStock', 0] }, 1, 0] } },
+          },
+        },
       ]);
 
       const categoryBreakdown = await Inventory.aggregate([
         {
-          $lookup: { from: 'items', localField: 'item', foreignField: '_id', as: 'itemInfo' }
+          $lookup: {
+            from: 'items',
+            localField: 'item',
+            foreignField: '_id',
+            as: 'itemInfo',
+          },
         },
         { $unwind: '$itemInfo' },
         {
@@ -240,19 +251,26 @@ export const inventoryController = {
             _id: '$itemInfo.category',
             totalItems: { $sum: 1 },
             totalStock: { $sum: '$currentStock' },
-            totalValue: { $sum: { $multiply: ['$currentStock', '$itemInfo.price'] } }
-          }
+            totalValue: { $sum: { $multiply: ['$currentStock', '$itemInfo.price'] } },
+          },
         },
-        { $sort: { _id: 1 } }
+        { $sort: { _id: 1 } },
       ]);
 
       res.json({
-        summary: summary[0] || { totalItems: 0, totalStock: 0, totalValue: 0, lowStockItems: 0, outOfStockItems: 0 },
-        categoryBreakdown
+        summary:
+          summary[0] || {
+            totalItems: 0,
+            totalStock: 0,
+            totalValue: 0,
+            lowStockItems: 0,
+            outOfStockItems: 0,
+          },
+        categoryBreakdown,
       });
     } catch (error) {
       console.error('Error fetching inventory summary:', error);
       res.status(500).json({ error: 'Server error while fetching inventory summary' });
     }
-  }
+  },
 };

@@ -1,5 +1,7 @@
 // server/controllers/branchController.js
 import Branch from '../models/Branch.js';
+import Transfer from '../models/Transfer.js';
+import Item from '../models/Item.js';
 
 /**
  * GET /api/branches
@@ -142,4 +144,57 @@ const handleError = (res, e, defaultMessage) => {
     return res.status(400).json({ error: errorMessage });
   }
   return res.status(500).json({ error: e?.message || defaultMessage });
+};
+/**
+ * POST /api/branches/inventory-from-transfers
+ * Body: { branchCode: string }
+ * Returns: { branch: {id, code, name}, inventory: [{ code, name, quantity }] }
+ */
+export const getBranchInventoryFromTransfers = async (req, res) => {
+  try {
+    const branchCode = String(req.body.branchCode || '').trim().toUpperCase();
+
+    if (!branchCode) {
+      return res.status(400).json({ error: 'branchCode is required in request body' });
+    }
+
+    const branch = await Branch.findOne({ code: branchCode })
+      .select('_id name code')
+      .lean();
+
+    if (!branch) {
+      return res.status(404).json({ error: 'Branch not found for given branchCode' });
+    }
+
+    // Aggregate all delivered transfers going INTO this branch
+    const inventory = await Transfer.aggregate([
+      { $match: { toBranch: branch._id, status: 'delivered' } },
+      { $group: { _id: '$item', quantity: { $sum: '$quantity' } } },
+      {
+        $lookup: {
+          from: 'items',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'item',
+        },
+      },
+      { $unwind: '$item' },
+      {
+        $project: {
+          _id: 0,
+          code: '$item.code',
+          name: '$item.name',
+          quantity: 1,
+        },
+      },
+      { $sort: { name: 1 } },
+    ]);
+
+    return res.json({
+      branch,
+      inventory,
+    });
+  } catch (e) {
+    handleError(res, e, 'Failed to load branch inventory from transfers');
+  }
 };

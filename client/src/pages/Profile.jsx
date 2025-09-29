@@ -12,7 +12,8 @@ import {
   Save,
   X,
   Shield,
-  Users as UsersIcon
+  Users as UsersIcon,
+  Lock
 } from 'lucide-react';
 import API from '../../api/axios';
 
@@ -20,6 +21,7 @@ const Profile = ({ user }) => {
   const [activeTab, setActiveTab] = useState('profile');
   const [isEditing, setIsEditing] = useState(false);
   const [showAddUser, setShowAddUser] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
   // Users table
   const [users, setUsers] = useState([]);
@@ -47,6 +49,16 @@ const Profile = ({ user }) => {
     role: 'Staff',
     password: ''
   });
+
+  // Change password form
+  const [pwForm, setPwForm] = useState({
+    currentPassword: '',
+    newPassword: '',
+    confirmNewPassword: ''
+  });
+  const [pwLoading, setPwLoading] = useState(false);
+  const [pwError, setPwError] = useState('');
+  const [pwSuccess, setPwSuccess] = useState('');
 
   // --- Helpers: pick a current user id if prop not provided
   const currentUserId = useMemo(() => {
@@ -194,6 +206,49 @@ const Profile = ({ user }) => {
     }
   };
 
+  // --- Change Password
+  const handleChangePassword = async () => {
+    setPwError('');
+    setPwSuccess('');
+
+    if (!currentUserId) {
+      setPwError('No user selected.');
+      return;
+    }
+
+    if (!pwForm.currentPassword || !pwForm.newPassword || !pwForm.confirmNewPassword) {
+      setPwError('Please fill in all fields.');
+      return;
+    }
+
+    if (pwForm.newPassword !== pwForm.confirmNewPassword) {
+      setPwError('New passwords do not match.');
+      return;
+    }
+
+    try {
+      setPwLoading(true);
+      await API.put('/auth/change-password', {
+        userId: currentUserId,
+        currentPassword: pwForm.currentPassword,
+        newPassword: pwForm.newPassword,
+      });
+      setPwSuccess('Password changed successfully.');
+      // Clear fields after success
+      setPwForm({ currentPassword: '', newPassword: '', confirmNewPassword: '' });
+      // Close modal after a short delay so user can read the success message
+      setTimeout(() => {
+        setShowChangePassword(false);
+        setPwSuccess('');
+      }, 800);
+    } catch (e) {
+      console.error(e);
+      setPwError(e?.response?.data?.error || 'Failed to change password.');
+    } finally {
+      setPwLoading(false);
+    }
+  };
+
   const ProfileTab = () => (
     <div className="space-y-6">
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
@@ -328,15 +383,22 @@ const Profile = ({ user }) => {
         </div>
       </div>
 
-      {/* Security Section (placeholder actions) */}
+      {/* Security Section */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
         <h4 className="text-lg font-semibold text-gray-900 mb-4">Security Settings</h4>
         <div className="space-y-4">
-          <button className="w-full md:w-auto bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors">
+          <button
+            onClick={() => setShowChangePassword(true)}
+            disabled={!currentUserId}
+            className={`w-full md:w-auto px-4 py-2 rounded-lg transition-colors flex items-center justify-center ${
+              currentUserId
+                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                : 'bg-gray-300 text-gray-600 cursor-not-allowed'
+            }`}
+            title={!currentUserId ? 'No user selected' : 'Change Password'}
+          >
+            <Lock className="w-4 h-4 mr-2" />
             Change Password
-          </button>
-          <button className="w-full md:w-auto ml-0 md:ml-3 bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors">
-            Enable Two-Factor Authentication
           </button>
         </div>
       </div>
@@ -427,7 +489,6 @@ const Profile = ({ user }) => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex flex-wrap gap-2">
-                        {/* Edit could open a modal – omitted for brevity */}
                         <button
                           onClick={() => (u.status === 'inactive' ? handleActivateUser(u._id) : handleDeleteUser(u._id))}
                           className={`px-3 py-1 rounded transition-colors flex items-center ${
@@ -437,9 +498,7 @@ const Profile = ({ user }) => {
                           }`}
                         >
                           {u.status === 'inactive' ? (
-                            <>
-                              Activate
-                            </>
+                            <>Activate</>
                           ) : (
                             <>
                               <Trash2 className="w-3 h-3 mr-1" />
@@ -574,6 +633,91 @@ const Profile = ({ user }) => {
                 className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
               >
                 Add User
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Change Password Modal */}
+      {showChangePassword && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-semibold text-gray-900">Change Password</h3>
+              <button 
+                onClick={() => {
+                  setShowChangePassword(false);
+                  setPwError('');
+                  setPwSuccess('');
+                  setPwForm({ currentPassword: '', newPassword: '', confirmNewPassword: '' });
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {pwError && <div className="mb-4 text-red-600 text-sm">{pwError}</div>}
+            {pwSuccess && <div className="mb-4 text-green-600 text-sm">{pwSuccess}</div>}
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Current Password *</label>
+                <input
+                  type="password"
+                  value={pwForm.currentPassword}
+                  onChange={(e) => setPwForm({...pwForm, currentPassword: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Enter current password"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">New Password *</label>
+                <input
+                  type="password"
+                  value={pwForm.newPassword}
+                  onChange={(e) => setPwForm({...pwForm, newPassword: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Enter new password"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Confirm New Password *</label>
+                <input
+                  type="password"
+                  value={pwForm.confirmNewPassword}
+                  onChange={(e) => setPwForm({...pwForm, confirmNewPassword: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Re-enter new password"
+                />
+              </div>
+            </div>
+            
+            <div className="flex justify-end space-x-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowChangePassword(false);
+                  setPwError('');
+                  setPwSuccess('');
+                  setPwForm({ currentPassword: '', newPassword: '', confirmNewPassword: '' });
+                }}
+                className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors"
+                disabled={pwLoading}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleChangePassword}
+                disabled={pwLoading}
+                className={`px-4 py-2 rounded-lg text-white transition-colors ${
+                  pwLoading ? 'bg-blue-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'
+                } flex items-center`}
+              >
+                <Lock className="w-4 h-4 mr-2" />
+                {pwLoading ? 'Changing…' : 'Change Password'}
               </button>
             </div>
           </div>
