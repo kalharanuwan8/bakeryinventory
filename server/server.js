@@ -7,7 +7,7 @@ import authRoutes from "./routes/authRoutes.js";
 import itemRoutes from "./routes/itemRoutes.js";
 import branchRoutes from "./routes/branchRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
-import reportRoutes from "./routes/reportRoutes.js";
+import reportsRoutes from "./routes/reportRoutes.js";
 import inventoryRoutes from "./routes/inventoryRoutes.js";
 
 dotenv.config();
@@ -30,7 +30,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/items", itemRoutes);
 app.use("/api/branches", branchRoutes);
 app.use("/api/users", userRoutes);
-app.use("/api/reports", reportRoutes);
+app.use('/api/report', reportsRoutes); 
 app.use("/api/inventory", inventoryRoutes);
 
 
