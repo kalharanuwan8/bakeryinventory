@@ -1,29 +1,35 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { 
-  DollarSign, 
-  Package, 
-  Building2, 
+// src/pages/Dashboard.jsx
+import React, { useEffect, useState } from "react";
+import {
+  DollarSign,
+  Package,
+  Building2,
   TrendingUp,
-  ShoppingCart,
-  Users,
-  AlertTriangle
-} from 'lucide-react';
-import { 
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell
-} from 'recharts';
-import API from '../../api/axios';
-import { useNavigate } from 'react-router-dom';
+  AlertTriangle,
+} from "lucide-react";
+import {
+  ResponsiveContainer,
+  Tooltip,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  PieChart,
+  Pie,
+  Cell,
+  BarChart,
+  Bar,
+} from "recharts";
+import API from "../../api/axios";
 
 const colorClasses = {
-  green:  { bg: 'bg-green-100',  text: 'text-green-600'  },
-  blue:   { bg: 'bg-blue-100',   text: 'text-blue-600'   },
-  purple: { bg: 'bg-purple-100', text: 'text-purple-600' },
-  orange: { bg: 'bg-orange-100', text: 'text-orange-600' },
-  gray:   { bg: 'bg-gray-100',   text: 'text-gray-600'   },
+  green: { bg: "bg-green-100", text: "text-green-600" },
+  blue: { bg: "bg-blue-100", text: "text-blue-600" },
+  purple: { bg: "bg-purple-100", text: "text-purple-600" },
+  orange: { bg: "bg-orange-100", text: "text-orange-600" },
+  gray: { bg: "bg-gray-100", text: "text-gray-600" },
 };
 
-const StatCard = ({ icon: Icon, title, value, change, color = 'green' }) => {
+const StatCard = ({ icon: Icon, title, value, change, color = "green" }) => {
   const colors = colorClasses[color] || colorClasses.gray;
   return (
     <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-200 hover:shadow-md transition-shadow">
@@ -31,14 +37,19 @@ const StatCard = ({ icon: Icon, title, value, change, color = 'green' }) => {
         <div>
           <p className="text-sm font-medium text-gray-600">{title}</p>
           <p className="text-3xl font-bold text-gray-900 mt-2">{value}</p>
-          {typeof change === 'number' && (
+          {typeof change === "number" && (
             <p
               className={`text-sm mt-2 flex items-center ${
-                change > 0 ? 'text-green-600' : change < 0 ? 'text-red-600' : 'text-gray-500'
+                change > 0
+                  ? "text-green-600"
+                  : change < 0
+                  ? "text-red-600"
+                  : "text-gray-500"
               }`}
             >
               <TrendingUp className="w-4 h-4 mr-1" />
-              {change > 0 ? '+' : ''}{change}%
+              {change > 0 ? "+" : ""}
+              {change}%
             </p>
           )}
         </div>
@@ -52,100 +63,112 @@ const StatCard = ({ icon: Icon, title, value, change, color = 'green' }) => {
 
 const Dashboard = () => {
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState('');
+  const [err, setErr] = useState("");
 
-  const [dailyProduction, setDailyProduction] = useState({ totalValue: 0, totalItems: 0, growth: 0 });
-  const [branches, setBranches] = useState([]);
+  // Cards
+  const [inventoryValue, setInventoryValue] = useState(0); // calculated from /items
+  const [totalItemsCount, setTotalItemsCount] = useState(0);
+  const [activeBranches, setActiveBranches] = useState(0);
   const [lowStockItems, setLowStockItems] = useState(0);
-  const [monthlyData, setMonthlyData] = useState([]);
-  const [categoryData, setCategoryData] = useState([]);
 
-  const totalBranches = branches.length;
-  const navigate = useNavigate();
-
-  // ---- helpers
-  const calcStockStatus = (stock = 0, daily = 0) => {
-    const ratio = daily ? stock / daily : 1;
-    if (ratio < 0.3) return 'low';
-    if (ratio < 0.7) return 'medium';
-    return 'good';
-  };
+  // Charts
+  const [top10ByAvailable, setTop10ByAvailable] = useState([]); // current available inventory (top 10 items)
+  const [productPie, setProductPie] = useState([]); // top products by inventory value
 
   useEffect(() => {
     const load = async () => {
       try {
         setLoading(true);
-        setErr('');
+        setErr("");
 
-        // 1) Try consolidated dashboard endpoint
-        try {
-          const res = await API.get('/dashboard');
-          const d = res.data || {};
-          setDailyProduction(d.dailyProduction || { totalValue: 0, totalItems: 0, growth: 0 });
-          setBranches(d.branches || []);
-          setLowStockItems(typeof d.lowStockItems === 'number' ? d.lowStockItems : 0);
-          setMonthlyData(d.monthlyData || []);
-          setCategoryData(d.categoryData || []);
-          return;
-        } catch (e) {
-          if (e?.response?.status !== 404) throw e;
-        }
+        // ---- Overview from report dashboard (branches & low stock)
+        const dashRes = await API.get("/report/dashboard");
+        const d = dashRes.data || {};
+        const ov = d.overview || {
+          totalItems: 0,
+          totalBranches: 0,
+          totalStock: 0,
+          totalValue: 0,
+          lowStockItems: 0,
+        };
+        setTotalItemsCount(Number(ov.totalItems || 0));
+        setActiveBranches(Number(ov.totalBranches || 0));
+        setLowStockItems(Number(ov.lowStockItems || 0));
 
-        // 2) Fallback: compose from existing routes
-        const [itemsRes, branchesRes] = await Promise.all([
-          API.get('/items', { params: { location: 'main' } }),
-          API.get('/branches'),
-        ]);
+        // ---- Items list (router.get("/", getItems))
+        const itemsRes = await API.get("/items");
+        const items = itemsRes.data?.items ?? itemsRes.data ?? [];
 
-        const items = itemsRes.data.items || [];
-        const brs = (branchesRes.data.branches || []).map(b => ({
-          id: b._id,
-          name: b.name,
-          status: b.status || 'active',
-          items: b.totalItems ?? 0,
-          value: b.totalValue ?? 0,
-        }));
-        setBranches(brs);
-
-        const totalItems = items.reduce((s, it) => s + (Number(it.dailyProduction) || 0), 0);
-        const totalValue = items.reduce((s, it) => {
-          const qty = Number(it.dailyProduction) || 0;
-          const price = Number(it.price) || 0;
-          return s + qty * price;
-        }, 0);
-        setDailyProduction({ totalItems, totalValue, growth: 0 });
-
-        const lowCount = items.filter(it => calcStockStatus(it.stock, it.dailyProduction) === 'low').length;
-        setLowStockItems(lowCount);
-
-        const counts = items.reduce((m, it) => {
-          const c = it.category || 'Others';
-          m[c] = (m[c] || 0) + 1;
-          return m;
-        }, {});
-        const totalCats = Object.values(counts).reduce((a, b) => a + b, 0) || 1;
-        const palette = ['#16a34a','#22c55e','#4ade80','#86efac','#bbf7d0','#d1fae5','#34d399'];
-        const categories = Object.entries(counts).slice(0, 6).map(([name, count], i) => ({
-          name,
-          value: Math.round((count / totalCats) * 100),
-          color: palette[i % palette.length],
-        }));
-        setCategoryData(categories);
-
-        const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-        const now = new Date();
-        const fallbackMonthly = Array.from({ length: 6 }).map((_, i) => {
-          const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+        // Normalize per item
+        const normalized = items.map((it) => {
+          const name =
+            it.name || it.itemName || it.title || it.code || "Unnamed";
+          const price = Number(it.price ?? 0) || 0;
+          const qty = Number(
+            it.currentStock ?? it.stock ?? it.quantity ?? 0
+          );
           return {
-            month: months[d.getMonth()],
-            production: Math.round(totalValue * (0.8 + 0.05 * i)),
-            sales: Math.round(totalValue * (0.75 + 0.05 * i)),
+            name,
+            price,
+            qty,
+            value: price * qty,
           };
         });
-        setMonthlyData(fallbackMonthly);
+
+        // ---- CALCULATE INVENTORY VALUE (total)
+        const totalInvValue = normalized.reduce((s, x) => s + x.value, 0);
+        setInventoryValue(totalInvValue);
+
+        // ---- BAR: current available inventory of TOP 10 items
+        const top10 = [...normalized]
+          .sort((a, b) => b.qty - a.qty)
+          .slice(0, 10)
+          .map((x) => ({
+            name: x.name,
+            available: x.qty,
+            value: x.value, // for tooltip
+          }));
+        setTop10ByAvailable(top10);
+
+        // ---- PIE: top products by inventory value (share % of top 8)
+        const topValue = [...normalized]
+          .sort((a, b) => b.value - a.value)
+          .slice(0, 8);
+        const totalTopVal =
+          topValue.reduce((s, x) => s + (x.value || 0), 0) || 1;
+
+        const palette = [
+          "#16a34a",
+          "#22c55e",
+          "#4ade80",
+          "#86efac",
+          "#bbf7d0",
+          "#34d399",
+          "#10b981",
+          "#059669",
+        ];
+
+        let pie = topValue.map((p, i) => ({
+          name: p.name,
+          value: Math.round(((p.value || 0) / totalTopVal) * 100),
+          color: palette[i % palette.length],
+        }));
+        // ensure total 100%
+        const sumPct = pie.reduce((s, x) => s + x.value, 0);
+        if (sumPct !== 100 && pie.length) {
+          const idxMax = pie.reduce(
+            (imax, x, i) => (x.value > pie[imax].value ? i : imax),
+            0
+          );
+          pie[idxMax] = {
+            ...pie[idxMax],
+            value: pie[idxMax].value + (100 - sumPct),
+          };
+        }
+        setProductPie(pie);
       } catch (e) {
         console.error(e);
-        setErr(e?.response?.data?.error || 'Failed to load dashboard');
+        setErr(e?.response?.data?.error || "Failed to load dashboard");
       } finally {
         setLoading(false);
       }
@@ -154,138 +177,125 @@ const Dashboard = () => {
     load();
   }, []);
 
-  const totalStockValue = useMemo(
-    () => monthlyData?.[monthlyData.length - 1]?.production ?? 0,
-    [monthlyData]
-  );
-
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-900 mb-2">Dashboard</h1>
-        <p className="text-gray-600">Welcome back! Here's what's happening at your bakery today.</p>
+        <p className="text-gray-600">
+          Welcome back! Here&apos;s what&apos;s happening at your bakery today.
+        </p>
       </div>
 
       {err && <div className="mb-4 text-red-600">{err}</div>}
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
         <StatCard
           icon={DollarSign}
-          title="Daily Production Value"
-          value={`$${Number(dailyProduction.totalValue || 0).toLocaleString()}`}
-          change={Number.isFinite(dailyProduction.growth) ? dailyProduction.growth : 0}
+          title="Inventory Value"
+          value={`$${Number(inventoryValue || 0).toLocaleString()}`}
+          change={0}
           color="green"
         />
         <StatCard
           icon={Package}
-          title="Items Produced"
-          value={(dailyProduction.totalItems || 0).toLocaleString()}
+          title="Total Items"
+          value={(totalItemsCount || 0).toLocaleString()}
           change={0}
           color="blue"
         />
         <StatCard
           icon={Building2}
           title="Active Branches"
-          value={totalBranches}
+          value={activeBranches}
           color="purple"
         />
-        <StatCard
-          icon={AlertTriangle}
-          title="Low Stock Items"
-          value={lowStockItems}
-          color="orange"
-        />
+        
       </div>
 
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+        {/* NEW BAR: Top 10 items by CURRENT available inventory */}
         <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Monthly Production Trend</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={monthlyData}>
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">
+            Top 10 Items — Current Available Inventory
+          </h3>
+          <ResponsiveContainer width="100%" height={320}>
+            <BarChart data={top10ByAvailable}>
               <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="month" />
+              <XAxis
+                dataKey="name"
+                interval={0}
+                angle={-30}
+                dy={10}
+                textAnchor="end"
+                height={70}
+              />
               <YAxis />
-              <Tooltip />
-              <Line type="monotone" dataKey="production" stroke="#16a34a" strokeWidth={3} name="Production" />
-              <Line type="monotone" dataKey="sales" stroke="#22c55e" strokeWidth={2} strokeDasharray="5 5" name="Sales" />
-            </LineChart>
+              <Tooltip
+                formatter={(value, name, { payload }) => {
+                  if (name === "available") return [value, "Available"];
+                  if (name === "value")
+                    return [`$${Number(payload.value).toLocaleString()}`, "Value"];
+                  return [value, name];
+                }}
+              />
+              <Bar dataKey="available" fill="#16a34a" name="available" />
+            </BarChart>
           </ResponsiveContainer>
+          <p className="text-xs text-gray-500 mt-2">
+            Tooltip also shows each item&apos;s inventory value.
+          </p>
         </div>
 
+        {/* PIE: Top products by inventory value */}
         <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Product Categories</h3>
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">
+            Top Products (by inventory value)
+          </h3>
           <ResponsiveContainer width="100%" height={300}>
             <PieChart>
-              <Pie data={categoryData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={5} dataKey="value">
-                {categoryData.map((entry, index) => (
+              <Pie
+                data={productPie}
+                cx="50%"
+                cy="50%"
+                innerRadius={60}
+                outerRadius={100}
+                paddingAngle={5}
+                dataKey="value"
+              >
+                {productPie.map((entry, index) => (
                   <Cell key={`cell-${index}`} fill={entry.color} />
                 ))}
               </Pie>
-              <Tooltip />
+              <Tooltip
+                formatter={(val, _name, { payload }) => [
+                  `${val}%`,
+                  payload?.name ?? "Product",
+                ]}
+              />
             </PieChart>
           </ResponsiveContainer>
           <div className="grid grid-cols-2 gap-2 mt-4">
-            {categoryData.map((item, index) => (
+            {productPie.map((item, index) => (
               <div key={index} className="flex items-center">
-                <div className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: item.color }} />
-                <span className="text-sm text-gray-600">{item.name} ({item.value}%)</span>
+                <div
+                  className="w-3 h-3 rounded-full mr-2"
+                  style={{ backgroundColor: item.color }}
+                />
+                <span className="text-sm text-gray-600">
+                  {item.name} ({item.value}%)
+                </span>
               </div>
             ))}
+            {productPie.length === 0 && (
+              <span className="text-sm text-gray-500">
+                No products available.
+              </span>
+            )}
           </div>
         </div>
       </div>
-
-      {/* Branch Summary */}
-      <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="text-lg font-semibold text-gray-900">Branch Summary</h3>
-          <button
-            onClick={() => navigate('/branches')}
-            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
-          >
-            View All Branches
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {branches.map((branch) => (
-            <div key={branch.id} className="p-4 border border-gray-200 rounded-lg hover:shadow-md transition-shadow">
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="font-medium text-gray-900">{branch.name}</h4>
-                <span
-                  className={`px-2 py-1 text-xs rounded-full ${
-                    (branch.status || 'active') === 'active'
-                      ? 'bg-green-100 text-green-800'
-                      : 'bg-red-100 text-red-800'
-                  }`}
-                >
-                  {branch.status || 'active'}
-                </span>
-              </div>
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Items Available:</span>
-                  <span className="font-medium">{branch.items ?? '—'}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Total Value:</span>
-                  <span className="font-medium">
-                    {branch.value != null ? `$${Number(branch.value).toLocaleString()}` : '—'}
-                  </span>
-                </div>
-              </div>
-            </div>
-          ))}
-          {branches.length === 0 && !loading && (
-            <div className="text-gray-500">No branches found.</div>
-          )}
-        </div>
-      </div>
-
-      {/* Quick Actions */}
-      
     </div>
   );
 };

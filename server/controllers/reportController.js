@@ -1,101 +1,127 @@
 // controllers/reportController.js
-import mongoose from 'mongoose';
-import Inventory from '../models/Inventory.js';
-import Transfer from '../models/Transfer.js';
-import Item from '../models/Item.js';
-import Branch from '../models/Branch.js';
+import mongoose from "mongoose";
+import Inventory from "../models/Inventory.js";
+import Transfer from "../models/Transfer.js";
+import Item from "../models/Item.js";
+import Branch from "../models/Branch.js";
 
 const { isValidObjectId, Types } = mongoose;
 
-export const reportController = {
-  // Get dashboard overview data (no auth required)
-  getDashboardData: async (req, res) => {
-    try {
-      // You can accept optional date range but it's not required by this controller
-      // const { startDate, endDate } = req.query;
+/**
+ * Helpers that avoid NaN when a field is missing/null
+ */
+const $num = (expr, fallback = 0) => ({ $ifNull: [expr, fallback] });
 
+export const reportController = {
+  /**
+   * GET /api/reports/overview
+   * Dashboard overview (totals + category + branch perf + recent transfers)
+   */
+  getDashboardData: async (_req, res) => {
+    try {
+      // counts (from your schema)
       const [totalItems, totalBranches] = await Promise.all([
         Item.countDocuments({ isActive: true }),
-        Branch.countDocuments({ status: 'active' }),
+        Branch.countDocuments({ status: "active" }),
       ]);
 
-      // Inventory summary
+      // Inventory summary (using inventories + items.price)
       const inventorySummary = await Inventory.aggregate([
         {
           $lookup: {
-            from: 'items',
-            localField: 'item',
-            foreignField: '_id',
-            as: 'itemInfo',
+            from: "items",
+            localField: "item",
+            foreignField: "_id",
+            as: "itemInfo",
           },
         },
-        { $unwind: '$itemInfo' },
+        { $unwind: "$itemInfo" },
         {
           $group: {
             _id: null,
-            totalStock: { $sum: '$currentStock' },
-            totalValue: { $sum: { $multiply: ['$currentStock', '$itemInfo.price'] } },
+            totalStock: { $sum: $num("$currentStock") },
+            totalValue: {
+              $sum: {
+                $multiply: [$num("$currentStock"), $num("$itemInfo.price")],
+              },
+            },
             lowStockItems: {
               $sum: {
-                $cond: [{ $lte: ['$currentStock', '$reorderPoint'] }, 1, 0],
+                $cond: [
+                  { $lte: [$num("$currentStock"), $num("$reorderPoint")] },
+                  1,
+                  0,
+                ],
               },
             },
           },
         },
       ]);
 
-      // Category distribution
+      // Category distribution (group by item.category)
       const categoryDistribution = await Inventory.aggregate([
         {
           $lookup: {
-            from: 'items',
-            localField: 'item',
-            foreignField: '_id',
-            as: 'itemInfo',
+            from: "items",
+            localField: "item",
+            foreignField: "_id",
+            as: "itemInfo",
           },
         },
-        { $unwind: '$itemInfo' },
+        { $unwind: "$itemInfo" },
         {
           $group: {
-            _id: '$itemInfo.category',
+            _id: $num("$itemInfo.category", "Uncategorized"),
             count: { $sum: 1 },
-            totalStock: { $sum: '$currentStock' },
-            totalValue: { $sum: { $multiply: ['$currentStock', '$itemInfo.price'] } },
+            totalStock: { $sum: $num("$currentStock") },
+            totalValue: {
+              $sum: {
+                $multiply: [$num("$currentStock"), $num("$itemInfo.price")],
+              },
+            },
           },
         },
         { $sort: { count: -1 } },
       ]);
 
-      // Branch performance using real inventory data
+      // Branch performance (via inventories + branch + item.price)
       const branchPerformance = await Inventory.aggregate([
         {
           $lookup: {
-            from: 'branches',
-            localField: 'branch',
-            foreignField: '_id',
-            as: 'branchInfo',
+            from: "branches",
+            localField: "branch",
+            foreignField: "_id",
+            as: "branchInfo",
           },
         },
+        { $unwind: "$branchInfo" },
         {
           $lookup: {
-            from: 'items',
-            localField: 'item',
-            foreignField: '_id',
-            as: 'itemInfo',
+            from: "items",
+            localField: "item",
+            foreignField: "_id",
+            as: "itemInfo",
           },
         },
-        { $unwind: '$branchInfo' },
-        { $unwind: '$itemInfo' },
+        { $unwind: "$itemInfo" },
         {
           $group: {
-            _id: '$branch',
-            name: { $first: '$branchInfo.name' },
+            _id: "$branch",
+            name: { $first: "$branchInfo.name" },
             items: { $sum: 1 },
-            value: { $sum: { $multiply: ['$currentStock', '$itemInfo.price'] } },
-            totalStock: { $sum: '$currentStock' },
+            totalStock: { $sum: $num("$currentStock") },
+            value: {
+              $sum: {
+                $multiply: [$num("$currentStock"), $num("$itemInfo.price")],
+              },
+            },
             lowStockItems: {
               $sum: {
-                $cond: [{ $lte: ['$currentStock', '$reorderPoint'] }, 1, 0],
+                $cond: [
+                  { $lte: [$num("$currentStock"), $num("$reorderPoint")] },
+                  1,
+                  0,
+                ],
               },
             },
           },
@@ -103,14 +129,43 @@ export const reportController = {
         { $sort: { value: -1 } },
       ]);
 
-      // Recent transfers
-      const recentTransfers = await Transfer.find()
-        .populate('item', 'name code')
-        .populate('fromBranch', 'name')
-        .populate('toBranch', 'name')
-        .sort({ createdAt: -1 })
-        .limit(10)
-        .lean();
+      // Recent transfers (handles null fromBranch)
+      const recentTransfers = await Transfer.aggregate([
+        {
+          $lookup: {
+            from: "items",
+            localField: "item",
+            foreignField: "_id",
+            as: "itemInfo",
+          },
+        },
+        { $unwind: "$itemInfo" },
+        {
+          $lookup: {
+            from: "branches",
+            localField: "fromBranch",
+            foreignField: "_id",
+            as: "fromBranchInfo",
+          },
+        },
+        {
+          $lookup: {
+            from: "branches",
+            localField: "toBranch",
+            foreignField: "_id",
+            as: "toBranchInfo",
+          },
+        },
+        { $unwind: { path: "$fromBranchInfo", preserveNullAndEmptyArrays: true } },
+        { $unwind: { path: "$toBranchInfo", preserveNullAndEmptyArrays: true } },
+        {
+          $addFields: {
+            totalValue: { $multiply: [$num("$quantity"), $num("$itemInfo.price")] },
+          },
+        },
+        { $sort: { createdAt: -1 } },
+        { $limit: 10 },
+      ]);
 
       const summary = inventorySummary[0] || {
         totalStock: 0,
@@ -128,102 +183,106 @@ export const reportController = {
         branchPerformance,
         recentTransfers,
       });
-    } catch (error) {
-      console.error('Error fetching dashboard data:', error);
-      res.status(500).json({ error: 'Server error while fetching dashboard data' });
+    } catch (err) {
+      console.error("Error fetching dashboard data:", err);
+      res.status(500).json({ error: "Server error while fetching dashboard data" });
     }
   },
 
-  // Get inventory report (no auth required)
+  /**
+   * GET /api/reports/inventory?branchId=&category=&stockStatus=
+   * Inventory with filters. Matches your fields: minStockLevel, maxStockLevel, reorderPoint.
+   */
   getInventoryReport: async (req, res) => {
     try {
       const { branchId, category, stockStatus } = req.query;
 
-      const matchConditions = {};
+      const match = {};
       if (branchId) {
         if (!isValidObjectId(branchId)) {
-          return res.status(400).json({ error: 'Invalid branchId' });
+          return res.status(400).json({ error: "Invalid branchId" });
         }
-        matchConditions.branch = new Types.ObjectId(branchId);
+        match.branch = new Types.ObjectId(branchId);
       }
 
       const pipeline = [
-        { $match: matchConditions },
+        { $match: match },
         {
           $lookup: {
-            from: 'items',
-            localField: 'item',
-            foreignField: '_id',
-            as: 'itemInfo',
+            from: "items",
+            localField: "item",
+            foreignField: "_id",
+            as: "itemInfo",
           },
         },
+        { $unwind: "$itemInfo" },
         {
           $lookup: {
-            from: 'branches',
-            localField: 'branch',
-            foreignField: '_id',
-            as: 'branchInfo',
+            from: "branches",
+            localField: "branch",
+            foreignField: "_id",
+            as: "branchInfo",
           },
         },
-        { $unwind: '$itemInfo' },
-        { $unwind: '$branchInfo' },
+        { $unwind: "$branchInfo" },
       ];
 
-      if (category && category !== 'all') {
-        pipeline.push({ $match: { 'itemInfo.category': category } });
+      if (category && category !== "all") {
+        pipeline.push({ $match: { "itemInfo.category": category } });
       }
 
+      // Stock status derived from your fields (null-safe)
       pipeline.push({
         $addFields: {
           stockStatus: {
-            $cond: [
-              { $eq: ['$currentStock', 0] },
-              'out_of_stock',
-              {
-                $cond: [
-                  { $lte: ['$currentStock', '$reorderPoint'] },
-                  'low',
-                  {
-                    $cond: [
-                      { $gte: ['$currentStock', '$maxStockLevel'] },
-                      'overstocked',
-                      'normal',
-                    ],
-                  },
-                ],
-              },
-            ],
+            $switch: {
+              branches: [
+                { case: { $eq: [$num("$currentStock"), 0] }, then: "out_of_stock" },
+                {
+                  case: { $lte: [$num("$currentStock"), $num("$reorderPoint")] },
+                  then: "low",
+                },
+                {
+                  case: { $gte: [$num("$currentStock"), $num("$maxStockLevel")] },
+                  then: "overstocked",
+                },
+              ],
+              default: "normal",
+            },
           },
-          totalValue: { $multiply: ['$currentStock', '$itemInfo.price'] },
+          totalValue: { $multiply: [$num("$currentStock"), $num("$itemInfo.price")] },
         },
       });
 
-      if (stockStatus && stockStatus !== 'all') {
+      if (stockStatus && stockStatus !== "all") {
         pipeline.push({ $match: { stockStatus } });
       }
 
-      pipeline.push({ $sort: { 'itemInfo.name': 1 } });
+      pipeline.push({ $sort: { "itemInfo.name": 1 } });
 
       const inventory = await Inventory.aggregate(pipeline);
 
+      // Summary
       const summaryAgg = await Inventory.aggregate([
-        { $match: matchConditions },
+        { $match: match },
         {
           $lookup: {
-            from: 'items',
-            localField: 'item',
-            foreignField: '_id',
-            as: 'itemInfo',
+            from: "items",
+            localField: "item",
+            foreignField: "_id",
+            as: "itemInfo",
           },
         },
-        { $unwind: '$itemInfo' },
+        { $unwind: "$itemInfo" },
         {
           $group: {
             _id: null,
             totalItems: { $sum: 1 },
-            totalStock: { $sum: '$currentStock' },
-            totalValue: { $sum: { $multiply: ['$currentStock', '$itemInfo.price'] } },
-            avgStockLevel: { $avg: '$currentStock' },
+            totalStock: { $sum: $num("$currentStock") },
+            totalValue: {
+              $sum: { $multiply: [$num("$currentStock"), $num("$itemInfo.price")] },
+            },
+            avgStockLevel: { $avg: $num("$currentStock") },
           },
         },
       ]);
@@ -238,41 +297,47 @@ export const reportController = {
             avgStockLevel: 0,
           },
       });
-    } catch (error) {
-      console.error('Error generating inventory report:', error);
-      res.status(500).json({ error: 'Server error while generating inventory report' });
+    } catch (err) {
+      console.error("Error generating inventory report:", err);
+      res.status(500).json({ error: "Server error while generating inventory report" });
     }
   },
 
-  // Get branch performance report (no auth required)
-  getBranchReport: async (req, res) => {
+  /**
+   * GET /api/reports/branches
+   * Branch performance using your schema (address.city, status, etc.)
+   */
+  getBranchReport: async (_req, res) => {
     try {
-      const branches = await Branch.find({ status: 'active' });
+      const branches = await Branch.find({ status: "active" }).lean();
 
       const branchReports = await Promise.all(
         branches.map(async (branch) => {
-          const inventory = await Inventory.find({ branch: branch._id })
-            .populate('item', 'name code category price')
+          const inv = await Inventory.find({ branch: branch._id })
+            .populate("item", "name code category price")
             .lean();
 
-          const totalItems = inventory.length;
-          const totalStock = inventory.reduce((sum, inv) => sum + (inv.currentStock || 0), 0);
-          const totalValue = inventory.reduce(
-            (sum, inv) => sum + (inv.currentStock || 0) * (inv.item?.price || 0),
-            0
+          const totals = inv.reduce(
+            (acc, r) => {
+              const stock = r.currentStock || 0;
+              const price = (r.item && r.item.price) || 0;
+              acc.totalItems += 1;
+              acc.totalStock += stock;
+              acc.totalValue += stock * price;
+              if (stock <= (r.reorderPoint ?? 0)) acc.lowStockItems += 1;
+              return acc;
+            },
+            { totalItems: 0, totalStock: 0, totalValue: 0, lowStockItems: 0 }
           );
-          const lowStockItems = inventory.filter(
-            (inv) => (inv.currentStock || 0) <= (inv.reorderPoint || 0)
-          ).length;
 
-          const categoryBreakdown = inventory.reduce((acc, inv) => {
-            const category = inv.item?.category || 'Uncategorized';
-            if (!acc[category]) {
-              acc[category] = { count: 0, stock: 0, value: 0 };
-            }
-            acc[category].count += 1;
-            acc[category].stock += inv.currentStock || 0;
-            acc[category].value += (inv.currentStock || 0) * (inv.item?.price || 0);
+          const categoryBreakdown = inv.reduce((acc, r) => {
+            const cat = (r.item && r.item.category) || "Uncategorized";
+            if (!acc[cat]) acc[cat] = { count: 0, stock: 0, value: 0 };
+            const stock = r.currentStock || 0;
+            const price = (r.item && r.item.price) || 0;
+            acc[cat].count += 1;
+            acc[cat].stock += stock;
+            acc[cat].value += stock * price;
             return acc;
           }, {});
 
@@ -281,89 +346,84 @@ export const reportController = {
               id: branch._id,
               name: branch.name,
               code: branch.code,
-              city: branch.address?.city,
+              city: branch.address?.city ?? null,
               status: branch.status,
             },
-            metrics: {
-              totalItems,
-              totalStock,
-              totalValue,
-              lowStockItems,
-            },
+            metrics: totals,
             categoryBreakdown,
           };
         })
       );
 
       res.json({ branchReports });
-    } catch (error) {
-      console.error('Error generating branch report:', error);
-      res.status(500).json({ error: 'Server error while generating branch report' });
+    } catch (err) {
+      console.error("Error generating branch report:", err);
+      res.status(500).json({ error: "Server error while generating branch report" });
     }
   },
 
-  // Get transfer report (no auth required)
+  /**
+   * GET /api/reports/transfers?startDate=&endDate=&branchId=&status=
+   * Works when fromBranch can be null (as in your data).
+   */
   getTransferReport: async (req, res) => {
     try {
       const { startDate, endDate, branchId, status } = req.query;
 
-      const matchConditions = {};
+      const match = {};
 
       if (startDate && endDate) {
         const start = new Date(startDate);
         const end = new Date(endDate);
-        if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-          return res.status(400).json({ error: 'Invalid startDate or endDate' });
+        if (isNaN(start) || isNaN(end)) {
+          return res.status(400).json({ error: "Invalid startDate or endDate" });
         }
-        matchConditions.createdAt = { $gte: start, $lte: end };
+        match.createdAt = { $gte: start, $lte: end };
       }
 
       if (branchId) {
         if (!isValidObjectId(branchId)) {
-          return res.status(400).json({ error: 'Invalid branchId' });
+          return res.status(400).json({ error: "Invalid branchId" });
         }
-        matchConditions.$or = [
-          { fromBranch: new Types.ObjectId(branchId) },
-          { toBranch: new Types.ObjectId(branchId) },
-        ];
+        const bid = new Types.ObjectId(branchId);
+        // fromBranch can be null in your data; match either side that equals the id
+        match.$or = [{ fromBranch: bid }, { toBranch: bid }];
       }
 
-      if (status && status !== 'all') {
-        matchConditions.status = status;
-      }
+      if (status && status !== "all") match.status = status;
 
       const transfers = await Transfer.aggregate([
-        { $match: matchConditions },
+        { $match: match },
         {
           $lookup: {
-            from: 'items',
-            localField: 'item',
-            foreignField: '_id',
-            as: 'itemInfo',
+            from: "items",
+            localField: "item",
+            foreignField: "_id",
+            as: "itemInfo",
+          },
+        },
+        { $unwind: "$itemInfo" },
+        {
+          $lookup: {
+            from: "branches",
+            localField: "fromBranch",
+            foreignField: "_id",
+            as: "fromBranchInfo",
           },
         },
         {
           $lookup: {
-            from: 'branches',
-            localField: 'fromBranch',
-            foreignField: '_id',
-            as: 'fromBranchInfo',
+            from: "branches",
+            localField: "toBranch",
+            foreignField: "_id",
+            as: "toBranchInfo",
           },
         },
-        {
-          $lookup: {
-            from: 'branches',
-            localField: 'toBranch',
-            foreignField: '_id',
-            as: 'toBranchInfo',
-          },
-        },
-        { $unwind: '$itemInfo' },
-        { $unwind: '$fromBranchInfo' },
-        { $unwind: '$toBranchInfo' },
+        { $unwind: { path: "$fromBranchInfo", preserveNullAndEmptyArrays: true } },
+        { $unwind: { path: "$toBranchInfo", preserveNullAndEmptyArrays: true } },
         {
           $addFields: {
-            totalValue: { $multiply: ['$quantity', '$itemInfo.price'] },
+            totalValue: { $multiply: [$num("$quantity"), $num("$itemInfo.price")] },
           },
         },
         { $sort: { createdAt: -1 } },
@@ -374,235 +434,227 @@ export const reportController = {
           acc.totalTransfers += 1;
           acc.totalQuantity += t.quantity || 0;
           acc.totalValue += t.totalValue || 0;
-          acc.byStatus[t.status] = (acc.byStatus[t.status] || 0) + 1;
+          acc.byStatus[t.status || "unknown"] = (acc.byStatus[t.status || "unknown"] || 0) + 1;
           return acc;
         },
         { totalTransfers: 0, totalQuantity: 0, totalValue: 0, byStatus: {} }
       );
 
       res.json({ transfers, summary });
-    } catch (error) {
-      console.error('Error generating transfer report:', error);
-      res.status(500).json({ error: 'Server error while generating transfer report' });
+    } catch (err) {
+      console.error("Error generating transfer report:", err);
+      res.status(500).json({ error: "Server error while generating transfer report" });
     }
   },
 
-  // Get financial summary report (no auth required)
-  getFinancialReport: async (req, res) => {
+  /**
+   * GET /api/reports/financial
+   * Uses inventories + items + transfers; all math is null-safe.
+   */
+  getFinancialReport: async (_req, res) => {
     try {
+      // Inventory value by branch
       const inventoryValue = await Inventory.aggregate([
         {
           $lookup: {
-            from: 'items',
-            localField: 'item',
-            foreignField: '_id',
-            as: 'itemInfo',
+            from: "items",
+            localField: "item",
+            foreignField: "_id",
+            as: "itemInfo",
           },
         },
+        { $unwind: "$itemInfo" },
         {
           $lookup: {
-            from: 'branches',
-            localField: 'branch',
-            foreignField: '_id',
-            as: 'branchInfo',
+            from: "branches",
+            localField: "branch",
+            foreignField: "_id",
+            as: "branchInfo",
           },
         },
-        { $unwind: '$itemInfo' },
-        { $unwind: '$branchInfo' },
+        { $unwind: "$branchInfo" },
         {
           $group: {
-            _id: '$branch',
-            branchName: { $first: '$branchInfo.name' },
-            totalValue: { $sum: { $multiply: ['$currentStock', '$itemInfo.price'] } },
+            _id: "$branch",
+            branchName: { $first: "$branchInfo.name" },
             totalItems: { $sum: 1 },
-            totalStock: { $sum: '$currentStock' },
+            totalStock: { $sum: $num("$currentStock") },
+            totalValue: {
+              $sum: {
+                $multiply: [$num("$currentStock"), $num("$itemInfo.price")],
+              },
+            },
           },
         },
         { $sort: { totalValue: -1 } },
       ]);
 
-      const totalInventoryValue = inventoryValue.reduce((sum, b) => sum + (b.totalValue || 0), 0);
+      const totalInventoryValue = inventoryValue.reduce(
+        (s, b) => s + (b.totalValue || 0),
+        0
+      );
 
-      // Calculate real financial data based on inventory and transfers
-      const transferStats = await Transfer.aggregate([
+      // Transfer stats (your transfers collection)
+      const transferStatsAgg = await Transfer.aggregate([
         {
           $lookup: {
-            from: 'items',
-            localField: 'item',
-            foreignField: '_id',
-            as: 'itemInfo',
+            from: "items",
+            localField: "item",
+            foreignField: "_id",
+            as: "itemInfo",
           },
         },
-        { $unwind: '$itemInfo' },
+        { $unwind: "$itemInfo" },
         {
           $group: {
             _id: null,
             totalTransfers: { $sum: 1 },
-            totalQuantity: { $sum: '$quantity' },
-            totalValue: { $sum: { $multiply: ['$quantity', '$itemInfo.price'] } },
-            avgTransferValue: { $avg: { $multiply: ['$quantity', '$itemInfo.price'] } },
+            totalQuantity: { $sum: $num("$quantity") },
+            totalValue: {
+              $sum: { $multiply: [$num("$quantity"), $num("$itemInfo.price")] },
+            },
+            avgTransferValue: {
+              $avg: { $multiply: [$num("$quantity"), $num("$itemInfo.price")] },
+            },
           },
         },
       ]);
 
-      const transferData = transferStats[0] || {
-        totalTransfers: 0,
-        totalQuantity: 0,
-        totalValue: 0,
-        avgTransferValue: 0,
-      };
+      const transferStats =
+        transferStatsAgg[0] || {
+          totalTransfers: 0,
+          totalQuantity: 0,
+          totalValue: 0,
+          avgTransferValue: 0,
+        };
 
-      // Calculate estimated revenue based on transfers (assuming transfers represent sales)
-      const estimatedMonthlyRevenue = transferData.totalValue || 0;
-      const estimatedDailyRevenue = estimatedMonthlyRevenue / 30;
-      const estimatedWeeklyRevenue = estimatedMonthlyRevenue / 4;
-      const estimatedYearlyRevenue = estimatedMonthlyRevenue * 12;
-
-      // Calculate expenses based on inventory value and estimated costs
+      // Very simple estimates (leave as-is but safe)
+      const monthlyRevenue = transferStats.totalValue || 0;
       const estimatedExpenses = {
-        ingredients: totalInventoryValue * 0.6, // 60% of inventory value for ingredients
-        labor: Math.max(85000, estimatedMonthlyRevenue * 0.3), // 30% of revenue for labor
-        utilities: Math.max(12000, estimatedMonthlyRevenue * 0.05), // 5% for utilities
-        rent: Math.max(25000, estimatedMonthlyRevenue * 0.1), // 10% for rent
-        other: Math.max(18000, estimatedMonthlyRevenue * 0.05), // 5% for other expenses
+        ingredients: totalInventoryValue * 0.6,
+        labor: Math.max(85000, monthlyRevenue * 0.3),
+        utilities: Math.max(12000, monthlyRevenue * 0.05),
+        rent: Math.max(25000, monthlyRevenue * 0.1),
+        other: Math.max(18000, monthlyRevenue * 0.05),
       };
+      const totalExpenses = Object.values(estimatedExpenses).reduce((s, v) => s + v, 0);
 
-      const totalExpenses = Object.values(estimatedExpenses).reduce((sum, expense) => sum + expense, 0);
-      const grossProfit = estimatedMonthlyRevenue - estimatedExpenses.ingredients;
-      const netProfit = estimatedMonthlyRevenue - totalExpenses;
-
-      const realFinancialData = {
+      const financial = {
         revenue: {
-          daily: Math.round(estimatedDailyRevenue),
-          weekly: Math.round(estimatedWeeklyRevenue),
-          monthly: Math.round(estimatedMonthlyRevenue),
-          yearly: Math.round(estimatedYearlyRevenue),
+          daily: Math.round(monthlyRevenue / 30),
+          weekly: Math.round(monthlyRevenue / 4),
+          monthly: Math.round(monthlyRevenue),
+          yearly: Math.round(monthlyRevenue * 12),
         },
         expenses: estimatedExpenses,
         profit: {
-          gross: Math.round(grossProfit),
-          net: Math.round(netProfit),
+          gross: Math.round(monthlyRevenue - estimatedExpenses.ingredients),
+          net: Math.round(monthlyRevenue - totalExpenses),
         },
       };
 
       res.json({
-        inventoryValue: {
-          total: totalInventoryValue,
-          byBranch: inventoryValue,
-        },
-        financial: realFinancialData,
-        transferStats: transferData,
+        inventoryValue: { total: totalInventoryValue, byBranch: inventoryValue },
+        financial,
+        transferStats,
         trends: {
           monthly: [
-            { month: 'Jan', revenue: Math.round(estimatedMonthlyRevenue * 0.9), profit: Math.round(netProfit * 0.9) },
-            { month: 'Feb', revenue: Math.round(estimatedMonthlyRevenue * 0.95), profit: Math.round(netProfit * 0.95) },
-            { month: 'Mar', revenue: Math.round(estimatedMonthlyRevenue), profit: Math.round(netProfit) },
+            { month: "Jan", revenue: Math.round(monthlyRevenue * 0.9), profit: Math.round((monthlyRevenue - totalExpenses) * 0.9) },
+            { month: "Feb", revenue: Math.round(monthlyRevenue * 0.95), profit: Math.round((monthlyRevenue - totalExpenses) * 0.95) },
+            { month: "Mar", revenue: Math.round(monthlyRevenue), profit: Math.round(monthlyRevenue - totalExpenses) }
           ],
         },
       });
-    } catch (error) {
-      console.error('Error generating financial report:', error);
-      res.status(500).json({ error: 'Server error while generating financial report' });
+    } catch (err) {
+      console.error("Error generating financial report:", err);
+      res.status(500).json({ error: "Server error while generating financial report" });
     }
   },
 
-  // Get low stock alerts report (no auth required)
-  getAlertsReport: async (req, res) => {
+  /**
+   * GET /api/reports/alerts
+   * Low/critical stock based on currentStock & reorderPoint.
+   */
+  getAlertsReport: async (_req, res) => {
     try {
       const alerts = await Inventory.aggregate([
         {
           $lookup: {
-            from: 'items',
-            localField: 'item',
-            foreignField: '_id',
-            as: 'itemInfo',
+            from: "items",
+            localField: "item",
+            foreignField: "_id",
+            as: "itemInfo",
           },
         },
+        { $unwind: "$itemInfo" },
         {
           $lookup: {
-            from: 'branches',
-            localField: 'branch',
-            foreignField: '_id',
-            as: 'branchInfo',
+            from: "branches",
+            localField: "branch",
+            foreignField: "_id",
+            as: "branchInfo",
           },
         },
-        { $unwind: '$itemInfo' },
-        { $unwind: '$branchInfo' },
+        { $unwind: "$branchInfo" },
         {
           $addFields: {
             alertLevel: {
-              $cond: [
-                { $eq: ['$currentStock', 0] },
-                'critical',
-                {
-                  $cond: [
-                    { $lte: ['$currentStock', '$reorderPoint'] },
-                    'warning',
-                    'normal',
-                  ],
-                },
-              ],
+              $switch: {
+                branches: [
+                  { case: { $eq: [$num("$currentStock"), 0] }, then: "critical" },
+                  {
+                    case: { $lte: [$num("$currentStock"), $num("$reorderPoint")] },
+                    then: "warning",
+                  },
+                ],
+                default: "normal",
+              },
             },
           },
         },
-        { $match: { alertLevel: { $in: ['critical', 'warning'] } } },
+        { $match: { alertLevel: { $in: ["critical", "warning"] } } },
         { $sort: { alertLevel: 1, currentStock: 1 } },
       ]);
 
       const summary = {
-        critical: alerts.filter((a) => a.alertLevel === 'critical').length,
-        warning: alerts.filter((a) => a.alertLevel === 'warning').length,
+        critical: alerts.filter((a) => a.alertLevel === "critical").length,
+        warning: alerts.filter((a) => a.alertLevel === "warning").length,
         total: alerts.length,
       };
 
       res.json({ alerts, summary });
-    } catch (error) {
-      console.error('Error generating alerts report:', error);
-      res.status(500).json({ error: 'Server error while generating alerts report' });
+    } catch (err) {
+      console.error("Error generating alerts report:", err);
+      res.status(500).json({ error: "Server error while generating alerts report" });
     }
   },
 
+  /**
+   * Generic :type passthrough used by your routes
+   */
   getReport: async (req, res) => {
     try {
       const { type } = req.params;
-      const { range } = req.query;
-
-      // Route to appropriate report function based on type
       switch (type) {
-        case 'overview':
-        case 'dashboard':
+        case "overview":
+        case "dashboard":
           return reportController.getDashboardData(req, res);
-        case 'inventory':
+        case "inventory":
           return reportController.getInventoryReport(req, res);
-        case 'branches':
+        case "branches":
           return reportController.getBranchReport(req, res);
-        case 'transfers':
+        case "transfers":
           return reportController.getTransferReport(req, res);
-        case 'financial':
+        case "financial":
           return reportController.getFinancialReport(req, res);
-        case 'alerts':
+        case "alerts":
           return reportController.getAlertsReport(req, res);
         default:
-          return res.status(400).json({ error: 'Invalid report type' });
+          return res.status(400).json({ error: "Invalid report type" });
       }
-    } catch (error) {
-      console.error('Error generating report:', error);
-      res.status(500).json({ error: 'Failed to generate report' });
-    }
-  },
-
-  generatePDF: async (req, res) => {
-    try {
-      const { type } = req.params;
-      const { range } = req.query;
-
-      // Add PDF generation logic here
-      // You might want to use a library like PDFKit or html-pdf
-
-      res.download('path-to-generated-pdf');
-    } catch (error) {
-      console.error('Error generating PDF:', error);
-      res.status(500).json({ error: 'Failed to generate PDF' });
+    } catch (err) {
+      console.error("Error generating report:", err);
+      res.status(500).json({ error: "Failed to generate report" });
     }
   },
 };
