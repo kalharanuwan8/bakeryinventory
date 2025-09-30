@@ -26,4 +26,7 @@ router.get('/financial', reportController.getFinancialReport);
 // Low stock / alerts report
 router.get('/alerts', reportController.getAlertsReport);
 
+// Generic report endpoint (for client compatibility)
+router.get('/:type', reportController.getReport);
+
 export default router;

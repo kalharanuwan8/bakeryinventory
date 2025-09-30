@@ -138,8 +138,17 @@ transferItems: async (req, res) => {
     deliveryDate: new Date(),
   });
 
-  // then decrement main item stock
+  // then decrement main item stock and update destination branch inventory
   await Item.updateOne({ _id: item._id }, { $inc: { stock: -qty } });
+  await Inventory.updateOne(
+    { item: item._id, branch: branch._id },
+    {
+      $setOnInsert: { reorderPoint: 10, maxStockLevel: 100, lastRestocked: new Date() },
+      $inc: { currentStock: qty },
+      $set: { lastUpdated: new Date() },
+    },
+    { upsert: true }
+  );
 
   return res.status(201).json({ transfer });
 },
