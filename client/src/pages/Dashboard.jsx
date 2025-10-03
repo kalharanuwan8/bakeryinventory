@@ -193,7 +193,7 @@ const Dashboard = () => {
         <StatCard
           icon={DollarSign}
           title="Inventory Value"
-          value={`$${Number(inventoryValue || 0).toLocaleString()}`}
+          value={`Rs. ${Number(inventoryValue || 0).toLocaleString()}`}
           change={0}
           color="green"
         />
@@ -236,7 +236,7 @@ const Dashboard = () => {
                 formatter={(value, name, { payload }) => {
                   if (name === "available") return [value, "Available"];
                   if (name === "value")
-                    return [`$${Number(payload.value).toLocaleString()}`, "Value"];
+                    return [`Rs. ${Number(payload.value).toLocaleString()}`, "Value"];
                   return [value, name];
                 }}
               />

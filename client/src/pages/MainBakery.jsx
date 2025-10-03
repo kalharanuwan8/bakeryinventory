@@ -189,7 +189,7 @@ const MainBakery = () => {
             <Package className="w-8 h-8 text-blue-600" />
             <div className="ml-4">
               <p className="text-2xl font-bold text-gray-900">
-                ${items.reduce((sum, item) => sum + ((item.stock || 0) * (item.price || 0)), 0).toFixed(2)}
+                Rs. {items.reduce((sum, item) => sum + ((item.stock || 0) * (item.price || 0)), 0).toFixed(2)}
               </p>
               <p className="text-gray-600 text-sm">Stock Value</p>
             </div>
@@ -234,7 +234,7 @@ const MainBakery = () => {
                         <span className="px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-800">{item.category}</span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        ${Number(item.price || 0).toFixed(2)}
+                        Rs. {Number(item.price || 0).toFixed(2)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-gray-900">{item.stock ?? 0} units</div>
