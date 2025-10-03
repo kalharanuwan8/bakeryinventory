@@ -6,7 +6,9 @@ import {
   deleteBranch,
   updateBranchStatus,
   listCities,
-  getBranchInventoryFromTransfers 
+  getBranchInventoryFromTransfers,
+  getBranchInventoryDetails,
+  getAllBranchesInventorySummary
 } from '../controllers/branchController.js';
 
 const router = express.Router();
@@ -28,6 +30,10 @@ router.delete('/:id', deleteBranch);
 
 // Update branch status
 router.patch('/:id/status', updateBranchStatus);
+
+// Inventory endpoints
 router.post('/branches/inventory', getBranchInventoryFromTransfers);
+router.get('/:id/inventory-details', getBranchInventoryDetails);
+router.get('/inventory-summary', getAllBranchesInventorySummary);
 
 export default router;

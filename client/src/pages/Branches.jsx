@@ -10,6 +10,11 @@ import {
   Building2,
   DollarSign,
   Package,
+  TrendingUp,
+  AlertTriangle,
+  Calendar,
+  BarChart3,
+  PieChart,
 } from 'lucide-react';
 import API from '../../api/axios';
 
@@ -38,6 +43,12 @@ const Branch = () => {
   const [inventoryData, setInventoryData] = useState({ branch: null, inventory: [] });
   const [loadingInventory, setLoadingInventory] = useState(false);
 
+  // Enhanced inventory data
+  const [inventoryDetails, setInventoryDetails] = useState(null);
+  const [dailySummary, setDailySummary] = useState([]);
+  const [categoryBreakdown, setCategoryBreakdown] = useState([]);
+  const [overallSummary, setOverallSummary] = useState(null);
+
   const emptyForm = {
     name: '',
     code: '',
@@ -54,6 +65,7 @@ const Branch = () => {
 
   useEffect(() => {
     fetchCities();
+    fetchOverallSummary();
   }, []);
 
   useEffect(() => {
@@ -154,16 +166,32 @@ const Branch = () => {
       setLoadingInventory(true);
       setShowInventoryModal(true);
       
-      const response = await API.post('/branches/branches/inventory', {
-        branchCode: branch.code
-      });
+      // Fetch detailed inventory data
+      const [basicResponse, detailsResponse] = await Promise.all([
+        API.post('/branches/branches/inventory', {
+          branchCode: branch.code
+        }),
+        API.get(`/branches/${branch._id}/inventory-details`)
+      ]);
       
-      setInventoryData(response.data);
+      setInventoryData(basicResponse.data);
+      setInventoryDetails(detailsResponse.data);
+      setDailySummary(detailsResponse.data.dailySummary || []);
+      setCategoryBreakdown(detailsResponse.data.inventory?.categoryBreakdown || []);
     } catch (error) {
       console.error(error);
       alert(error?.response?.data?.error || 'Failed to load inventory');
     } finally {
       setLoadingInventory(false);
+    }
+  };
+
+  const fetchOverallSummary = async () => {
+    try {
+      const response = await API.get('/branches/inventory-summary');
+      setOverallSummary(response.data);
+    } catch (error) {
+      console.error('Failed to load overall summary:', error);
     }
   };
 
@@ -239,12 +267,50 @@ const Branch = () => {
       </div>
 
       {/* Summary Cards */}
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 mb-8 flex w-1/3">
-        <div className="flex items-center">
-          <Building2 className="w-8 h-8 text-green-600" />
-          <div className="ml-4">
-            <p className="text-2xl font-bold text-gray-900">{branches.length}</p>
-            <p className="text-gray-600 text-sm">Total Branches</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+          <div className="flex items-center">
+            <Building2 className="w-8 h-8 text-green-600" />
+            <div className="ml-4">
+              <p className="text-2xl font-bold text-gray-900">{branches.length}</p>
+              <p className="text-gray-600 text-sm">Total Branches</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+          <div className="flex items-center">
+            <Package className="w-8 h-8 text-blue-600" />
+            <div className="ml-4">
+              <p className="text-2xl font-bold text-gray-900">
+                {overallSummary?.summary?.totalItems || 0}
+              </p>
+              <p className="text-gray-600 text-sm">Total Items</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+          <div className="flex items-center">
+            <DollarSign className="w-8 h-8 text-yellow-600" />
+            <div className="ml-4">
+              <p className="text-2xl font-bold text-gray-900">
+                Rs. {overallSummary?.summary?.totalInventoryValue?.toLocaleString() || 0}
+              </p>
+              <p className="text-gray-600 text-sm">Total Inventory Value</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+          <div className="flex items-center">
+            <TrendingUp className="w-8 h-8 text-purple-600" />
+            <div className="ml-4">
+              <p className="text-2xl font-bold text-gray-900">
+                Rs. {overallSummary?.summary?.averageValuePerBranch?.toLocaleString() || 0}
+              </p>
+              <p className="text-gray-600 text-sm">Avg Value per Branch</p>
+            </div>
           </div>
         </div>
       </div>
@@ -294,6 +360,18 @@ const Branch = () => {
                     ? `${b.operatingHours.monday.open} - ${b.operatingHours.monday.close}`
                     : '—'}
                 </div>
+                {overallSummary?.branches?.find(br => br._id === b._id) && (
+                  <div className="flex items-center text-sm text-gray-600">
+                    <Package className="w-4 h-4 mr-2" />
+                    {overallSummary.branches.find(br => br._id === b._id).inventory.totalItems} items
+                  </div>
+                )}
+                {overallSummary?.branches?.find(br => br._id === b._id) && (
+                  <div className="flex items-center text-sm text-gray-600">
+                    <DollarSign className="w-4 h-4 mr-2" />
+                    Rs. {overallSummary.branches.find(br => br._id === b._id).inventory.totalValue.toLocaleString()}
+                  </div>
+                )}
               </div>
 
               <div className="border-t pt-4 grid grid-cols-3 gap-3">
@@ -547,13 +625,13 @@ const Branch = () => {
         </div>
       )}
 
-      {/* Inventory Modal */}
+      {/* Enhanced Inventory Modal */}
       {showInventoryModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-xl p-6 w-full max-w-6xl max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-xl font-semibold text-gray-900">
-                {inventoryData.branch?.name} — Inventory
+                {inventoryData.branch?.name} — Detailed Inventory
               </h3>
               <button
                 onClick={() => setShowInventoryModal(false)}
@@ -566,30 +644,190 @@ const Branch = () => {
             {loadingInventory ? (
               <div className="text-center py-8">Loading inventory...</div>
             ) : (
-              <>
-                {inventoryData.inventory.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">
-                    No inventory items found
-                  </div>
-                ) : (
-                  <div className="divide-y">
-                    {inventoryData.inventory.map((item) => (
-                      <div
-                        key={item.code}
-                        className="py-3 flex justify-between items-center"
-                      >
-                        <div>
-                          <div className="font-medium">{item.name}</div>
-                          <div className="text-sm text-gray-500">Code: {item.code}</div>
-                        </div>
-                        <div className="font-semibold">
-                          Qty: {item.quantity}
+              <div className="space-y-6">
+                {/* Summary Cards */}
+                {inventoryDetails && (
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="bg-blue-50 p-4 rounded-lg">
+                      <div className="flex items-center">
+                        <Package className="w-6 h-6 text-blue-600" />
+                        <div className="ml-3">
+                          <p className="text-lg font-semibold text-gray-900">
+                            {inventoryDetails.inventory.totalItems}
+                          </p>
+                          <p className="text-sm text-gray-600">Total Items</p>
                         </div>
                       </div>
-                    ))}
+                    </div>
+                    <div className="bg-green-50 p-4 rounded-lg">
+                      <div className="flex items-center">
+                        <TrendingUp className="w-6 h-6 text-green-600" />
+                        <div className="ml-3">
+                          <p className="text-lg font-semibold text-gray-900">
+                            {inventoryDetails.inventory.totalQuantity}
+                          </p>
+                          <p className="text-sm text-gray-600">Total Quantity</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-yellow-50 p-4 rounded-lg">
+                      <div className="flex items-center">
+                        <DollarSign className="w-6 h-6 text-yellow-600" />
+                        <div className="ml-3">
+                          <p className="text-lg font-semibold text-gray-900">
+                            Rs. {inventoryDetails.inventory.totalValue.toLocaleString()}
+                          </p>
+                          <p className="text-sm text-gray-600">Total Value</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-red-50 p-4 rounded-lg">
+                      <div className="flex items-center">
+                        <AlertTriangle className="w-6 h-6 text-red-600" />
+                        <div className="ml-3">
+                          <p className="text-lg font-semibold text-gray-900">
+                            {inventoryDetails.inventory.lowStockItems.length}
+                          </p>
+                          <p className="text-sm text-gray-600">Low Stock</p>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
-              </>
+
+                {/* Daily Summary */}
+                {dailySummary.length > 0 && (
+                  <div className="bg-white border border-gray-200 rounded-lg p-6">
+                    <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                      <Calendar className="w-5 h-5 mr-2" />
+                      Daily Inventory Summary (Last 7 Days)
+                    </h4>
+                    <div className="space-y-3">
+                      {dailySummary.map((day) => (
+                        <div key={day._id} className="border border-gray-100 rounded-lg p-4">
+                          <div className="flex justify-between items-center mb-2">
+                            <h5 className="font-medium text-gray-900">{day._id}</h5>
+                            <div className="text-sm text-gray-600">
+                              {day.totalItems} items • {day.totalQuantity} qty • Rs. {day.totalValue.toLocaleString()}
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                            {day.items.slice(0, 6).map((item, idx) => (
+                              <div key={idx} className="text-sm bg-gray-50 p-2 rounded">
+                                <span className="font-medium">{item.name}</span>
+                                <span className="text-gray-600 ml-2">({item.quantity} × Rs. {item.price})</span>
+                              </div>
+                            ))}
+                            {day.items.length > 6 && (
+                              <div className="text-sm text-gray-500 p-2">
+                                +{day.items.length - 6} more items
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Category Breakdown */}
+                {categoryBreakdown.length > 0 && (
+                  <div className="bg-white border border-gray-200 rounded-lg p-6">
+                    <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                      <PieChart className="w-5 h-5 mr-2" />
+                      Category Breakdown
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {categoryBreakdown.map((category) => (
+                        <div key={category._id} className="border border-gray-100 rounded-lg p-4">
+                          <h5 className="font-medium text-gray-900 mb-2">{category._id}</h5>
+                          <div className="space-y-1 text-sm">
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Items:</span>
+                              <span className="font-medium">{category.totalItems}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Quantity:</span>
+                              <span className="font-medium">{category.totalQuantity}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Value:</span>
+                              <span className="font-medium">Rs. {category.totalValue.toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Current Inventory */}
+                <div className="bg-white border border-gray-200 rounded-lg p-6">
+                  <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                    <BarChart3 className="w-5 h-5 mr-2" />
+                    Current Inventory
+                  </h4>
+                  {inventoryDetails?.inventory?.current?.length === 0 ? (
+                    <div className="text-center py-8 text-gray-500">
+                      No inventory items found
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b border-gray-200">
+                            <th className="text-left py-3 px-4 font-medium text-gray-900">Item</th>
+                            <th className="text-left py-3 px-4 font-medium text-gray-900">Category</th>
+                            <th className="text-left py-3 px-4 font-medium text-gray-900">Price</th>
+                            <th className="text-left py-3 px-4 font-medium text-gray-900">Quantity</th>
+                            <th className="text-left py-3 px-4 font-medium text-gray-900">Total Value</th>
+                            <th className="text-left py-3 px-4 font-medium text-gray-900">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {inventoryDetails?.inventory?.current?.map((item) => (
+                            <tr key={item.code} className="border-b border-gray-100">
+                              <td className="py-3 px-4">
+                                <div>
+                                  <div className="font-medium text-gray-900">{item.name}</div>
+                                  <div className="text-sm text-gray-500">Code: {item.code}</div>
+                                </div>
+                              </td>
+                              <td className="py-3 px-4 text-gray-600">{item.category}</td>
+                              <td className="py-3 px-4 text-gray-600">Rs. {item.price.toLocaleString()}</td>
+                              <td className="py-3 px-4">
+                                <span className={`px-2 py-1 rounded-full text-sm ${
+                                  item.quantity <= 5 
+                                    ? 'bg-red-100 text-red-800' 
+                                    : item.quantity <= 10 
+                                    ? 'bg-yellow-100 text-yellow-800'
+                                    : 'bg-green-100 text-green-800'
+                                }`}>
+                                  {item.quantity}
+                                </span>
+                              </td>
+                              <td className="py-3 px-4 font-medium text-gray-900">
+                                Rs. {item.totalValue.toLocaleString()}
+                              </td>
+                              <td className="py-3 px-4">
+                                <span className={`px-2 py-1 rounded-full text-xs ${
+                                  item.quantity <= 5 
+                                    ? 'bg-red-100 text-red-800' 
+                                    : item.quantity <= 10 
+                                    ? 'bg-yellow-100 text-yellow-800'
+                                    : 'bg-green-100 text-green-800'
+                                }`}>
+                                  {item.quantity <= 5 ? 'Low Stock' : item.quantity <= 10 ? 'Medium' : 'Good'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </div>
         </div>

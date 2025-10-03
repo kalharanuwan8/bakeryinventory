@@ -198,3 +198,211 @@ export const getBranchInventoryFromTransfers = async (req, res) => {
     handleError(res, e, 'Failed to load branch inventory from transfers');
   }
 };
+
+/**
+ * GET /api/branches/:id/inventory-details
+ * Returns detailed inventory information with daily summaries and total values
+ */
+export const getBranchInventoryDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date } = req.query; // Optional date filter for daily summary
+
+    const branch = await Branch.findById(id).select('_id name code address').lean();
+    if (!branch) {
+      return res.status(404).json({ error: 'Branch not found' });
+    }
+
+    // Get current inventory with item details
+    const currentInventory = await Transfer.aggregate([
+      { $match: { toBranch: branch._id, status: 'delivered' } },
+      { $group: { _id: '$item', totalQuantity: { $sum: '$quantity' } } },
+      {
+        $lookup: {
+          from: 'items',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'item',
+        },
+      },
+      { $unwind: '$item' },
+      {
+        $project: {
+          _id: 0,
+          itemId: '$item._id',
+          code: '$item.code',
+          name: '$item.name',
+          category: '$item.category',
+          price: '$item.price',
+          quantity: '$totalQuantity',
+          totalValue: { $multiply: ['$totalQuantity', '$item.price'] },
+        },
+      },
+      { $sort: { name: 1 } },
+    ]);
+
+    // Calculate total inventory value
+    const totalInventoryValue = currentInventory.reduce((sum, item) => sum + item.totalValue, 0);
+
+    // Get daily inventory summary (last 7 days)
+    const dailySummary = await Transfer.aggregate([
+      {
+        $match: {
+          toBranch: branch._id,
+          status: 'delivered',
+          deliveryDate: {
+            $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), // Last 7 days
+          },
+        },
+      },
+      {
+        $lookup: {
+          from: 'items',
+          localField: 'item',
+          foreignField: '_id',
+          as: 'item',
+        },
+      },
+      { $unwind: '$item' },
+      {
+        $group: {
+          _id: {
+            date: { $dateToString: { format: '%Y-%m-%d', date: '$deliveryDate' } },
+            item: '$item._id',
+          },
+          quantity: { $sum: '$quantity' },
+          itemName: { $first: '$item.name' },
+          itemPrice: { $first: '$item.price' },
+        },
+      },
+      {
+        $group: {
+          _id: '$_id.date',
+          items: {
+            $push: {
+              itemId: '$_id.item',
+              name: '$itemName',
+              quantity: '$quantity',
+              price: '$itemPrice',
+              value: { $multiply: ['$quantity', '$itemPrice'] },
+            },
+          },
+          totalItems: { $sum: 1 },
+          totalQuantity: { $sum: '$quantity' },
+          totalValue: { $sum: { $multiply: ['$quantity', '$itemPrice'] } },
+        },
+      },
+      { $sort: { _id: -1 } },
+    ]);
+
+    // Get category breakdown
+    const categoryBreakdown = await Transfer.aggregate([
+      { $match: { toBranch: branch._id, status: 'delivered' } },
+      { $group: { _id: '$item', totalQuantity: { $sum: '$quantity' } } },
+      {
+        $lookup: {
+          from: 'items',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'item',
+        },
+      },
+      { $unwind: '$item' },
+      {
+        $group: {
+          _id: '$item.category',
+          totalItems: { $sum: 1 },
+          totalQuantity: { $sum: '$totalQuantity' },
+          totalValue: { $sum: { $multiply: ['$totalQuantity', '$item.price'] } },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+
+    // Get low stock alerts
+    const lowStockItems = currentInventory.filter(item => item.quantity <= 5);
+
+    res.json({
+      branch,
+      inventory: {
+        current: currentInventory,
+        totalItems: currentInventory.length,
+        totalQuantity: currentInventory.reduce((sum, item) => sum + item.quantity, 0),
+        totalValue: totalInventoryValue,
+        categoryBreakdown,
+        lowStockItems,
+      },
+      dailySummary,
+      summary: {
+        totalBranches: 1, // This specific branch
+        totalInventoryValue,
+        totalItems: currentInventory.length,
+        lowStockCount: lowStockItems.length,
+        lastUpdated: new Date(),
+      },
+    });
+  } catch (e) {
+    handleError(res, e, 'Failed to load branch inventory details');
+  }
+};
+
+/**
+ * GET /api/branches/inventory-summary
+ * Returns summary of all branches with their inventory details
+ */
+export const getAllBranchesInventorySummary = async (req, res) => {
+  try {
+    const branches = await Branch.find({ status: 'active' }).select('_id name code address').lean();
+
+    const branchSummaries = await Promise.all(
+      branches.map(async (branch) => {
+        const inventory = await Transfer.aggregate([
+          { $match: { toBranch: branch._id, status: 'delivered' } },
+          { $group: { _id: '$item', totalQuantity: { $sum: '$quantity' } } },
+          {
+            $lookup: {
+              from: 'items',
+              localField: '_id',
+              foreignField: '_id',
+              as: 'item',
+            },
+          },
+          { $unwind: '$item' },
+          {
+            $project: {
+              totalValue: { $multiply: ['$totalQuantity', '$item.price'] },
+            },
+          },
+        ]);
+
+        const totalValue = inventory.reduce((sum, item) => sum + item.totalValue, 0);
+        const totalItems = inventory.length;
+
+        return {
+          ...branch,
+          inventory: {
+            totalItems,
+            totalValue,
+            lastUpdated: new Date(),
+          },
+        };
+      })
+    );
+
+    const overallSummary = {
+      totalBranches: branches.length,
+      totalInventoryValue: branchSummaries.reduce((sum, branch) => sum + branch.inventory.totalValue, 0),
+      totalItems: branchSummaries.reduce((sum, branch) => sum + branch.inventory.totalItems, 0),
+      averageValuePerBranch: branchSummaries.length > 0 
+        ? branchSummaries.reduce((sum, branch) => sum + branch.inventory.totalValue, 0) / branchSummaries.length 
+        : 0,
+    };
+
+    res.json({
+      branches: branchSummaries,
+      summary: overallSummary,
+    });
+  } catch (e) {
+    handleError(res, e, 'Failed to load branches inventory summary');
+  }
+};

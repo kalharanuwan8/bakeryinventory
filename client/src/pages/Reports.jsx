@@ -305,7 +305,7 @@ const Reports = () => {
     return (
       <div className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          <StatCard icon={DollarSign} title="Inventory Value" value={`$${(ov.totalValue || 0).toLocaleString()}`} color="green" />
+          <StatCard icon={DollarSign} title="Inventory Value" value={`Rs. ${(ov.totalValue || 0).toLocaleString()}`} color="green" />
           <StatCard icon={Package} title="Total Items" value={ov.totalItems ?? 0} color="blue" />
           <StatCard icon={Building2} title="Active Branches" value={ov.totalBranches ?? 0} color="purple" />
           <StatCard icon={TrendingUp} title="Low Stock Items" value={ov.lowStockItems ?? 0} color="orange" />
@@ -351,7 +351,7 @@ const Reports = () => {
       <div className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           <StatCard icon={Package} title="Total Items" value={data.summary?.totalItems ?? 0} color="blue" />
-          <StatCard icon={DollarSign} title="Total Value" value={`$${(data.summary?.totalValue || 0).toLocaleString()}`} color="green" />
+          <StatCard icon={DollarSign} title="Total Value" value={`Rs. ${(data.summary?.totalValue || 0).toLocaleString()}`} color="green" />
           <StatCard icon={TrendingUp} title="Total Stock" value={data.summary?.totalStock ?? 0} color="orange" />
           <StatCard icon={Package} title="Avg Stock Level" value={(data.summary?.avgStockLevel || 0).toFixed(1)} color="red" />
         </div>
@@ -502,9 +502,9 @@ const Reports = () => {
     return (
       <div className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          <StatCard icon={DollarSign} title="Monthly Revenue" value={`$${monthly.toLocaleString()}`} color="green" />
-          <StatCard icon={TrendingUp} title="Net Profit" value={`$${net.toLocaleString()}`} color="purple" />
-          <StatCard icon={Package} title="Total Inventory Value" value={`$${(data.inventoryValue?.total || 0).toLocaleString()}`} color="blue" />
+          <StatCard icon={DollarSign} title="Monthly Revenue" value={`Rs. ${monthly.toLocaleString()}`} color="green" />
+          <StatCard icon={TrendingUp} title="Net Profit" value={`Rs. ${net.toLocaleString()}`} color="purple" />
+          <StatCard icon={Package} title="Total Inventory Value" value={`Rs. ${(data.inventoryValue?.total || 0).toLocaleString()}`} color="blue" />
           <StatCard icon={FileText} title="Transfers (Month est.)" value={data.transferStats?.totalTransfers ?? 0} color="orange" />
         </div>
 
@@ -598,7 +598,7 @@ const Reports = () => {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <StatCard icon={FileText} title="Transfers" value={data.summary?.totalTransfers ?? 0} color="blue" />
           <StatCard icon={Package} title="Quantity" value={data.summary?.totalQuantity ?? 0} color="green" />
-          <StatCard icon={DollarSign} title="Total Value" value={`$${(data.summary?.totalValue || 0).toLocaleString()}`} color="purple" />
+          <StatCard icon={DollarSign} title="Total Value" value={`Rs. ${(data.summary?.totalValue || 0).toLocaleString()}`} color="purple" />
         </div>
 
         <Panel title="Recent Transfers (first 50)">
